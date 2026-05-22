@@ -14,15 +14,14 @@ if 'db' not in st.session_state:
     st.session_state['db'] = {str(i): {"score": DEFAULT_SCORE, "streak_win": 0, "streak_loss": 0} for i in range(TOTAL_WIRES)}
 if 'history' not in st.session_state: st.session_state['history'] = []
 if 'final_scores' not in st.session_state: st.session_state['final_scores'] = None
-if 'hardness' not in st.session_state: st.session_state['hardness'] = None
 
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'])
 reader = load_ocr()
 
-# --- THUẬT TOÁN ĐÁNH GIÁ CHẤT LƯỢNG DÂY (V7.1) ---
-def update_matrix_v7_1(db, loto_list, gdb_loto):
+# --- THUẬT TOÁN ĐẢO NGƯỢC THUẬN DÒNG TIỀN (V8) ---
+def update_matrix_v8(db, loto_list, gdb_loto):
     actual_db = db.get('matrix', db) if isinstance(db.get('matrix'), dict) else db
     new_matrix = json.loads(json.dumps(actual_db))
     
@@ -37,33 +36,37 @@ def update_matrix_v7_1(db, loto_list, gdb_loto):
         is_hit = num_formed in loto_list
         is_gdb = (num_formed == gdb_loto)
 
-        # Quy tắc điểm Thưởng/Phạt
+        # QUY TẮC ĐIỂM V8: THUẬN THEO DÒNG TIỀN
         if is_hit:
             wire["streak_loss"] = 0
             wire["streak_win"] += 1
+            
+            # Thưởng GĐB (Tôn vinh quân vương)
             if is_gdb:
-                wire["score"] -= 5.0 # Trừ 5đ nếu nổ đề (Lọc nhiễu)
-            elif wire["streak_win"] < 4:
-                wire["score"] += float(loto_list.count(num_formed))
+                wire["score"] += 2.0
+            
+            # Thưởng nháy mạnh tay (Nhân tố chính)
+            if wire["streak_win"] < 4:
+                wire["score"] += float(loto_list.count(num_formed)) * 2.0
             else:
-                wire["score"] -= 1.0 # Phạt bệt
+                wire["score"] -= 0.5 # Bệt quá dài mới hạ nhiệt nhẹ
         else:
             wire["streak_win"] = 0
             wire["streak_loss"] += 1
+            # Giảm nén lò xo để tránh Top ảo
             if wire["streak_loss"] >= 4:
-                wire["score"] += 0.5 # Nén lò xo
+                wire["score"] += 0.1 
 
-        # Phân loại dây dựa trên phong độ (Hệ số P)
-        p_coef = 0.5 # Mặc định Dây Chì
+        # HỆ SỐ UY TÍN V8 (ĐẢO NGƯỢC)
+        p_coef = 0.7 # Mặc định Dây Chì (Số khan)
         is_good = False
         
-        # Dây Vàng: Đang nén lâu hoặc vừa bùng nổ kỳ đầu
-        if wire["streak_loss"] >= 4 or (wire["streak_win"] == 1 and is_hit):
-            p_coef = 1.5
+        # Ưu tiên dây đang nổ (Momentum)
+        if 0 < wire["streak_win"] < 4:
+            p_coef = 1.5 # Dây Vàng: Đang nổ cực sung
             is_good = True
-        # Dây Bạc: Nổ ổn định dưới 4 kỳ
-        elif 0 < wire["streak_win"] < 4:
-            p_coef = 1.2
+        elif wire["streak_loss"] == 0 and is_hit:
+            p_coef = 1.2 # Dây Bạc: Vừa bứt phá
             is_good = True
         
         num_power[num_formed] += (wire["score"] * p_coef)
@@ -75,12 +78,12 @@ def update_matrix_v7_1(db, loto_list, gdb_loto):
     return new_matrix, num_power, hardness_map
 
 # --- 2. GIAO DIỆN ---
-st.set_page_config(page_title="Matrix V7.1 Pro", layout="wide")
-st.markdown("<h2 style='text-align: center; color: #00FFCC;'>💎 MATRIX 11.449 V7.1 - SIÊU PHÂN LỚP ĐỘ CỨNG</h2>", unsafe_allow_html=True)
+st.set_page_config(page_title="Matrix V8 - Follow Money", layout="wide")
+st.markdown("<h2 style='text-align: center; color: #00FF00;'>📈 MATRIX V8 - THUẬN DÒNG TIỀN</h2>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("📂 HỆ THỐNG")
-    if st.button("🚨 RESET MỚI HOÀN TOÀN"):
+    if st.button("🚨 RESET"):
         st.session_state.clear()
         st.rerun()
 
@@ -97,14 +100,14 @@ with st.sidebar:
     st.session_state['raw_input'] = st.text_area("27 giải:", value=st.session_state.get('raw_input', ""), height=100)
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""), max_chars=2)
 
-    if st.button("🔥 CHẠY PHÂN TÍCH"):
+    if st.button("🔥 PHÂN TÍCH V8"):
         raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
         if len(raw_list) < 27:
-            st.error("Phải nhập đủ 27 giải!")
+            st.error("Thiếu giải!")
         else:
             v_loto = [n[-2:] for n in raw_list[:27]]
             
-            # 1. Lấy bảng điểm cũ để đối soát TRƯỚC KHI cập nhật
+            # Đối soát bảng điểm của HÔM QUA
             if st.session_state['final_scores'] is not None:
                 old_scores = st.session_state['final_scores']
             else:
@@ -112,13 +115,13 @@ with st.sidebar:
             
             df_old = pd.DataFrame(list(old_scores.items()), columns=['Số', 'Điểm']).sort_values(by='Điểm', ascending=False).reset_index(drop=True)
             
-            # 2. Cập nhật dữ liệu mới
-            new_db, power_scores, hardness_map = update_matrix_v7_1(st.session_state['db'], v_loto, st.session_state['gdb_val'])
+            # Cập nhật điểm mới cho HÔM NAY
+            new_db, power_scores, hardness_map = update_matrix_v8(st.session_state['db'], v_loto, st.session_state['gdb_val'])
             st.session_state['db'] = new_db
             st.session_state['final_scores'] = power_scores
             st.session_state['hardness'] = hardness_map
 
-            # 3. Phân vùng lịch sử 16 lớp chuẩn yêu cầu
+            # Lịch sử 16 vùng
             slices = {
                 "T5": (0, 5), "T10": (5, 10), "T15": (10, 15), "T20": (15, 20),
                 "T25": (20, 25), "T30": (25, 30), "T35": (30, 35), "T40": (35, 40),
@@ -146,35 +149,27 @@ with st.sidebar:
 if st.session_state.get('final_scores'):
     c_left, c_right = st.columns([1, 4])
     with c_left:
-        st.subheader("📊 TỔNG LỰC & ĐỘ CỨNG")
+        st.subheader("📊 TỔNG LỰC V8")
         df_disp = pd.DataFrame([
             {"Số": n, "Điểm": p, "Cứng (%)": st.session_state['hardness'][n]} 
             for n, p in st.session_state['final_scores'].items()
         ])
         
-        # Logic Icon mới để hiện Băng ❄️
         def set_icon(row):
-            # Kim cương: Tổng lực mạnh + Dây bền
-            if row['Điểm'] > 150 and row['Cứng (%)'] > 60: return "💎"
-            # Lửa: Điểm vọt lên cực nhanh (thường do bệt hoặc nổ nháy kép)
-            if row['Điểm'] > 130: return "🔥"
-            # Băng: Độ cứng cao (>50%) nhưng điểm chưa quá nóng (vùng nén tiềm năng)
-            if row['Cứng (%)'] > 50: return "❄️"
-            return "⏳"
+            if row['Điểm'] > 180: return "🚀" # Đang bay
+            if row['Cứng (%)'] > 60: return "🔋" # Đầy pin
+            if row['Điểm'] < 90: return "⚠️" # Yếu (số khan)
+            return "✅"
         
-        df_disp['Loại'] = df_disp.apply(set_icon, axis=1)
+        df_disp['Trạng thái'] = df_disp.apply(set_icon, axis=1)
         df_disp = df_disp.sort_values(by='Điểm', ascending=False).reset_index(drop=True)
         st.dataframe(df_disp, use_container_width=True, height=550)
 
     with c_right:
-        st.subheader("📜 LỊCH SỬ 16 PHÂN LỚP CHI TIẾT")
-        # Sử dụng dataframe để có thanh cuộn ngang cho 16 vùng
+        st.subheader("📜 ĐỐI SOÁT THUẬN DÒNG")
         st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True)
         
         st.divider()
-        st.subheader("🎯 TRÍCH QUÂN DẪN ĐẦU")
-        num = st.number_input("Số lượng:", 1, 100, 5)
+        st.subheader("🎯 DÀN CHIẾN ĐẤU (TOP ĐIỂM)")
+        num = st.number_input("Số lượng quân:", 1, 100, 10)
         st.code(", ".join(df_disp.head(num)['Số'].tolist()))
-        
-        save_data = {"matrix": st.session_state['db'], "history": st.session_state['history']}
-        st.download_button("💾 XUẤT JSON DỮ LIỆU BỀN", data=json.dumps(save_data), file_name="matrix_v7_1.json")
