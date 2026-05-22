@@ -1,4 +1,7 @@
 streamlit
-easyocr
 pandas
+easyocr
 opencv-python-headless
+numpy
+Pillow
+matplotlib
