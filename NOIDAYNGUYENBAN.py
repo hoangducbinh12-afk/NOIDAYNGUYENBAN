@@ -23,7 +23,7 @@ def get_mapping_v10(full_str):
     return mapping
 
 # --- 2. HÀM XỬ LÝ DỮ LIỆU ---
-def process_data_v104():
+def process_data_v105():
     if not st.session_state.get('last_full_str'): return
     
     current_map = get_mapping_v10(st.session_state['last_full_str'])
@@ -55,11 +55,12 @@ def process_data_v104():
 
 # --- 3. GIAO DIỆN ---
 st.set_page_config(layout="wide")
-st.title("🌐 MATRIX V10.4 - DYNAMIC CONTROL")
+st.title("🌐 MATRIX V10.5 - CHIẾN THUẬT TỐI ƯU")
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
 
+# SIDEBAR: Điều khiển và Bộ lọc
 with st.sidebar:
     st.header("📂 HỆ THỐNG")
     if st.button("🚨 RESET ALL"):
@@ -72,19 +73,18 @@ with st.sidebar:
         st.session_state['db'] = {str(k): v for k, v in data.get('matrix', data).items()}
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', "")
-        process_data_v104()
+        process_data_v105()
         st.success("Đã đồng bộ!")
 
     st.divider()
-    st.header("🎛️ BỘ LỌC TÙY BIẾN")
-    # Các nút điều chỉnh thông số lọc
+    st.header("🎛️ ĐIỀU CHỈNH BỘ LỌC")
     f_an = st.slider("Khoảng Ăn (An):", 0, 10, (1, 3))
     f_gan = st.slider("Khoảng Nén (Gan):", 0, 40, (0, 40))
     f_day = st.slider("Mật độ dây tối thiểu:", 0, 115, 20)
     f_hard = st.slider("Độ cứng tối thiểu (%):", 0.0, 40.0, 23.5, 0.5)
     
     st.divider()
-    st.header("📸 QUÉT KQ")
+    st.header("📸 QUÉT KQ & NHẬP LIỆU")
     up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
     if up_img and st.button("CHẠY OCR"):
         reader = load_ocr()
@@ -95,11 +95,10 @@ with st.sidebar:
             st.session_state['gdb_val'] = nums[0][-2:]
         st.rerun()
 
-    st.session_state['raw_input'] = st.text_area("27 giải:", value=st.session_state.get('raw_input', ""), height=80)
+    st.session_state['raw_input'] = st.text_area("Dữ liệu 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""), max_chars=2)
 
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        # ... (Giữ nguyên logic phân tích của V10.3 nhưng nhớ update process_data_v104)
         raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
         if len(raw_list) >= 27:
             full_str_new = "".join(raw_list[:27])
@@ -124,10 +123,10 @@ with st.sidebar:
                 st.session_state['db'] = new_db
                 st.session_state['history'].insert(0, {"STT": len(st.session_state['history']) + 1, "GĐB": gdb_val})
             st.session_state['last_full_str'] = full_str_new
-            process_data_v104()
+            process_data_v105()
             st.rerun()
 
-# --- 4. HIỂN THỊ ---
+# --- 4. HIỂN THỊ CHÍNH ---
 if st.session_state.get('df_raw') is not None:
     df_all = st.session_state['df_raw'].sort_values("Điểm", ascending=False)
     
@@ -137,20 +136,31 @@ if st.session_state.get('df_raw') is not None:
         (df_all["Nén"] >= f_gan[0]) & (df_all["Nén"] <= f_gan[1]) &
         (df_all["Dây"] >= f_day) &
         (df_all["Cứng(%)"] >= f_hard)
-    ].copy()
+    ].copy().sort_values("Điểm", ascending=False)
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.subheader("📊 TỔNG LỰC 100 SỐ (FULL)")
-        st.dataframe(df_all, use_container_width=True, height=600)
-    
-    with c2:
-        st.subheader("🎯 LỌC TÙY BIẾN (SIDEBAR)")
-        st.dataframe(df_filtered.sort_values("Điểm", ascending=False), use_container_width=True)
-        
-        st.divider()
-        st.subheader("📜 LỊCH SỬ KẾT QUẢ (TOP 50)")
-        st.dataframe(pd.DataFrame(st.session_state['history']).head(50), use_container_width=True)
-        
+    # DÒNG TRÊN CÙNG: ĐỒNG HỒ ĐẾM QUÂN
+    c_m1, c_m2, c_m3 = st.columns(3)
+    with c_m1:
+        st.metric("TỔNG QUÂN TRONG BỘ LỌC", f"{len(df_filtered)} quân")
+    with c_m2:
+        st.metric("MẬT ĐỘ DÂY TRUNG BÌNH", f"{int(df_filtered['Dây'].mean()) if not df_filtered.empty else 0} sợi")
+    with c_m3:
         if st.session_state.get('db'):
-            st.download_button("💾 XUẤT JSON V10.4", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v10_4.json")
+            st.download_button("💾 XUẤT JSON V10.5", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v10_5.json")
+
+    st.divider()
+
+    # CHIA CỘT HIỂN THỊ DỮ LIỆU
+    col_left, col_right = st.columns([1, 2]) # Tỉ lệ 1:2 để lịch sử và lọc rộng hơn
+    
+    with col_left:
+        with st.expander("📊 BẢNG TỔNG LỰC (FULL 100 SỐ)", expanded=False):
+            st.dataframe(df_all, use_container_width=True, height=400)
+        
+        st.subheader("🎯 QUÂN BÀI ĐÃ LỌC")
+        st.dataframe(df_filtered, use_container_width=True, height=500)
+    
+    with col_right:
+        st.subheader("📜 LỊCH SỬ KẾT QUẢ ĐỐI SOÁT (FULL)")
+        # Hiển thị lịch sử với chiều cao lớn để mày soi thoải mái
+        st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=950)
