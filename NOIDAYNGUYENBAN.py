@@ -34,8 +34,8 @@ def get_mapping_v9(full_str):
             mapping[str(wire_id)] = num_formed
     return mapping
 
-def refresh_display_v94():
-    """TÍNH TOÁN HIỂN THỊ - FIX LỖI NÉN GIỐNG NHAU"""
+def refresh_display_v95():
+    """TÍNH TOÁN HIỂN THỊ - LOGIC MAX GAN & RESET 0"""
     if not st.session_state['last_full_str']: return
     
     current_map = get_mapping_v9(st.session_state['last_full_str'])
@@ -43,8 +43,9 @@ def refresh_display_v94():
     total_periods = len(st.session_state['history'])
     
     num_power = {f"{i:02d}": 0.0 for i in range(100)}
-    # Khởi tạo nén với giá trị cực lớn để tìm Min của các Max, hoặc dùng logic Win
-    num_compression = {f"{i:02d}": [] for i in range(100)} 
+    num_compression = {f"{i:02d}": 0 for i in range(100)} 
+    # Dùng cờ đánh dấu nếu có dây vừa nổ (loss=0)
+    num_has_hit = {f"{i:02d}": False for i in range(100)}
     temp_hrd = {f"{i:02d}": {"sum": 0.0, "count": 0} for i in range(100)}
 
     for wire_id, num_formed in current_map.items():
@@ -54,23 +55,27 @@ def refresh_display_v94():
         p_coef = 1.5 if wire.get("streak_win", 0) > 0 else 0.7
         num_power[num_formed] += (wire.get("score", DEFAULT_SCORE) * p_coef)
         
-        # 2. Thu thập tất cả streak_loss của các dây trỏ về số này
-        num_compression[num_formed].append(wire.get("streak_loss", 0))
+        # 2. Logic Nén của mày: Tìm Max, nhưng nếu có dây vừa nổ thì Reset 0
+        w_loss = wire.get("streak_loss", 0)
+        if w_loss == 0:
+            num_has_hit[num_formed] = True
+        
+        if w_loss > num_compression[num_formed]:
+            num_compression[num_formed] = w_loss
             
-        # 3. Độ cứng
+        # 3. Độ cứng (Vẫn giữ nguyên như mày đồng ý)
         eff = (wire.get("history_hits", 0) / total_periods * 100) if total_periods > 0 else 0
         temp_hrd[num_formed]["sum"] += eff
         temp_hrd[num_formed]["count"] += 1
 
-    # CHỐT ĐỘ NÉN: Nếu có dây nổ (loss=0), nén phải giảm. 
-    # Ở đây tao lấy trung bình cộng độ nén của các dây để thấy sự biến động mượt mà nhất
+    # CHỐT ĐỘ NÉN CUỐI CÙNG
     final_comp = {}
-    for n, losses in num_compression.items():
-        if not losses: 
-            final_comp[n] = 0
+    for n in range(100):
+        s = f"{n:02d}"
+        if num_has_hit[s]:
+            final_comp[s] = 0 # Con nào nổ thì nén về 0
         else:
-            # Nếu có dây vừa nổ (0), nó sẽ kéo trung bình nén xuống ngay lập tức
-            final_comp[n] = int(sum(losses) / len(losses))
+            final_comp[s] = num_compression[s] # Còn lại lấy Max Gan
 
     st.session_state['hardness'] = {n: (temp_hrd[n]["sum"]/temp_hrd[n]["count"]) if temp_hrd[n]["count"] > 0 else 0 for n in num_power}
     st.session_state['final_scores'] = num_power
@@ -79,20 +84,15 @@ def refresh_display_v94():
 def get_current_df_full():
     if st.session_state.get('final_scores'):
         df = pd.DataFrame([
-            {
-                "Số": n, 
-                "Điểm": p, 
-                "Cứng(%)": round(st.session_state['hardness'].get(n, 0), 1), 
-                "Nén": st.session_state['compression'].get(n, 0)
-            } 
+            {"Số": n, "Điểm": p, "Cứng(%)": round(st.session_state['hardness'].get(n, 0), 1), "Nén": st.session_state['compression'].get(n, 0)} 
             for n, p in st.session_state['final_scores'].items()
         ])
         return df
     return None
 
 # --- 3. GIAO DIỆN ---
-st.set_page_config(page_title="Matrix V9.4 Red Fix", layout="wide")
-st.markdown("<h2 style='text-align: center; color: #FF0000;'>🌐 MATRIX V9.4 - FIX NÉN TUYỆT ĐỐI</h2>", unsafe_allow_html=True)
+st.set_page_config(page_title="Matrix V9.5 Red Master", layout="wide")
+st.markdown("<h2 style='text-align: center; color: #FF0000;'>🌐 MATRIX V9.5 - LOGIC MAX GAN (BẢN CHUẨN)</h2>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("📂 HỆ THỐNG")
@@ -106,8 +106,8 @@ with st.sidebar:
         st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', None)
-        refresh_display_v94()
-        st.success("Đã đồng bộ ánh xạ & Fix nén!")
+        refresh_display_v95()
+        st.success("Đã đồng bộ ánh xạ & Max Gan!")
         st.rerun()
 
     st.divider()
@@ -130,12 +130,8 @@ with st.sidebar:
         if len(raw_list) >= 27:
             full_str_new = "".join(raw_list[:27])
             loto_list = [n[-2:] for n in raw_list[:27]]
-            
             old_df = get_current_df_full()
-            
-            if not st.session_state['last_full_str']:
-                st.session_state['last_full_str'] = full_str_new
-                
+            if not st.session_state['last_full_str']: st.session_state['last_full_str'] = full_str_new
             current_map = get_mapping_v9(st.session_state['last_full_str'])
             new_db = json.loads(json.dumps(st.session_state['db']))
             
@@ -155,7 +151,7 @@ with st.sidebar:
 
             st.session_state['db'] = new_db
             st.session_state['last_full_str'] = full_str_new
-            refresh_display_v94()
+            refresh_display_v95()
             
             if old_df is not None:
                 df_sorted_old = old_df.sort_values('Điểm', ascending=False).reset_index(drop=True)
@@ -163,12 +159,7 @@ with st.sidebar:
                 def check_hit(targets, res):
                     hits = [n for n in targets if n in res]; nhay = sum([res.count(n) for n in hits])
                     return f"{nhay}({','.join(sorted(list(set(hits))))})" if nhay > 0 else "0"
-                
-                rank_gdb = "-"
-                try: rank_gdb = df_sorted_old[df_sorted_old['Số'] == st.session_state['gdb_val']].index[0]
-                except: pass
-
-                history_entry = {"STT": len(st.session_state['history'])+1, "GĐB": st.session_state['gdb_val'], "Hạng": rank_gdb}
+                history_entry = {"STT": len(st.session_state['history'])+1, "GĐB": st.session_state['gdb_val']}
                 for label, (s, e) in slices.items():
                     history_entry[label] = check_hit(df_sorted_old.iloc[s:e]['Số'].tolist(), loto_list)
                 st.session_state['history'].insert(0, history_entry)
@@ -179,16 +170,11 @@ df_final = get_current_df_full()
 if df_final is not None:
     c1, c2 = st.columns([1.6, 3.4])
     top_scores = sorted(df_final['Điểm'].unique(), reverse=True)[:3]
-    def set_icon(row):
-        if row['Nén'] > 18: return "🧨"
-        if row['Điểm'] in top_scores: return "🚀"
-        if row['Cứng(%)'] > df_final['Cứng(%)'].mean(): return "🔋"
-        return "✅"
-    df_final['T.Thái'] = df_final.apply(set_icon, axis=1)
+    df_final['T.Thái'] = df_final.apply(lambda r: "🧨" if r['Nén'] > 18 else ("🚀" if r['Điểm'] in top_scores else ("🔋" if r['Cứng(%)'] > df_final['Cứng(%)'].mean() else "✅")), axis=1)
     df_sorted = df_final.sort_values('Điểm', ascending=False).reset_index(drop=True)
 
     with c1:
-        st.subheader("📊 TỔNG LỰC DÂY (FIXED)")
+        st.subheader("📊 TỔNG LỰC DÂY (100 GỐC)")
         st.dataframe(df_sorted, use_container_width=True, height=600)
     with c2:
         st.subheader("📜 LỊCH SỬ 16 VÙNG")
@@ -196,11 +182,11 @@ if df_final is not None:
         st.divider()
         col_a, col_b = st.columns(2)
         with col_a:
-            st.subheader("🎯 TOP LÒ XO")
+            st.subheader("🎯 TOP LÒ XO (MAX GAN)")
             st.table(df_sorted.sort_values('Nén', ascending=False).head(5)[['Số', 'Nén', 'Điểm']])
         with col_b:
             st.subheader("💾 DỮ LIỆU")
             save_data = {"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}
-            st.download_button("💾 XUẤT JSON V9.4", data=json.dumps(save_data), file_name="matrix_v9_4.json")
+            st.download_button("💾 XUẤT JSON V9.5", data=json.dumps(save_data), file_name="matrix_v9_5.json")
             num = st.number_input("Trích quân:", 1, 100, 10)
             st.code(", ".join(df_sorted.head(num)['Số'].tolist()))
