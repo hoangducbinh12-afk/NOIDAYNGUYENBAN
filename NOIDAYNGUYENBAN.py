@@ -5,7 +5,7 @@ import numpy as np
 import easyocr
 from PIL import Image
 
-# --- 1. KHỞI TẠO ---
+# --- 1. CÔNG CỤ & OCR ---
 TOTAL_POS = 107 
 
 @st.cache_resource
@@ -14,15 +14,15 @@ def load_ocr():
 
 def get_mapping_v10(full_str):
     if not full_str or len(full_str) < TOTAL_POS: return None
-    mapping = {str(i * TOTAL_POS + j): f"{full_str[i]}{full_str[j]}" for i in range(TOTAL_POS) for j in range(TOTAL_POS)}
-    return mapping
+    return {str(i * TOTAL_POS + j): f"{full_str[i]}{full_str[j]}" for i in range(TOTAL_POS) for j in range(TOTAL_POS)}
 
-def process_data_v108():
+def process_data_v109():
     if not st.session_state.get('last_full_str') or not st.session_state.get('db'): return
     current_map = get_mapping_v10(st.session_state['last_full_str'])
     db = st.session_state['db']
     history = st.session_state.get('history', [])
     total_periods = len(history)
+    
     stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "max_gan": 0, "wire_count": 0, "total_hits": 0} for i in range(100)}
     for wire_id, num in current_map.items():
         wire = db.get(str(wire_id), {"score": 100.0, "streak_win": 0, "streak_loss": 0, "history_hits": 0})
@@ -31,45 +31,66 @@ def process_data_v108():
         s["total_score"] += (wire.get("score", 100.0) * p_coef)
         if wire.get("streak_win", 0) > s["max_an"]: s["max_an"] = wire.get("streak_win", 0)
         if wire.get("streak_loss", 0) > s["max_gan"]: s["max_gan"] = wire.get("streak_loss", 0)
-    data_list = [{"Số": n, "Điểm": round(v["total_score"], 1), "An": v["max_an"], "Nén": v["max_gan"], "Dây": v["wire_count"], "Cứng(%)": round((v["total_hits"]/(v["wire_count"]*total_periods)*100),1) if total_periods>0 else 0} for n,v in stats.items()]
-    st.session_state['df_raw'] = pd.DataFrame(data_list)
+
+    data_list = []
+    for num, s in stats.items():
+        hardness = (s["total_hits"] / (s["wire_count"] * total_periods) * 100) if (total_periods > 0 and s["wire_count"] > 0) else 0
+        data_list.append({"Số": num, "Điểm": round(s["total_score"], 1), "An": s["max_an"], "Nén": s["max_gan"], "Dây": s["wire_count"], "Cứng(%)": round(hardness, 1)})
+    st.session_state['df_raw'] = pd.DataFrame(data_list).sort_values("Điểm", ascending=False).reset_index(drop=True)
+
+# Hàm đối soát để đổ vào lịch sử
+def audit_history(loto_list, gdb):
+    if 'df_raw' not in st.session_state: return {"STT": len(st.session_state['history'])+1, "GĐB": gdb}
+    
+    df = st.session_state['df_raw']
+    res = {"STT": len(st.session_state['history'])+1, "GĐB": gdb}
+    
+    # Định nghĩa các mốc Top
+    thresholds = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 95, 100]
+    prev_t = 0
+    for t in thresholds:
+        label = f"T{t}" if t < 100 else "Cao"
+        # Lấy danh sách số trong vùng rank này
+        subset = df.iloc[prev_t:t]
+        hits = [num for num in subset['Số'] if num in loto_list]
+        count = loto_list.count(hits[0]) if len(hits) == 1 else len(hits) # Đếm nháy nếu cần hoặc đếm số quân
+        # Ở đây loto_list chứa 27 số, ta đếm xem có bao nhiêu quân trong subset xuất hiện trong loto_list
+        found = [n for n in loto_list if n in subset['Số'].values]
+        if len(found) > 0:
+            res[label] = f"{len(found)}({','.join(set(found))})"
+        else:
+            res[label] = "0"
+        prev_t = t
+    return res
 
 # --- 2. GIAO DIỆN ---
-st.set_page_config(layout="wide", page_title="MATRIX V10.8")
+st.set_page_config(layout="wide", page_title="MATRIX V10.9")
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
 
 with st.sidebar:
-    st.header("📂 KHỞI TẠO HỆ THỐNG")
-    if st.button("🚨 RESET / LÀM MỚI TỪ ĐẦU"):
-        st.session_state.clear()
-        st.rerun()
-    
-    # Nút mới dành riêng cho mày
+    st.header("📂 HỆ THỐNG")
+    if st.button("🚨 RESET ALL"): st.session_state.clear(); st.rerun()
     if st.button("💎 KHỞI TẠO MA TRẬN TRỐNG"):
         st.session_state['db'] = {str(i): {"score": 100.0, "streak_win": 0, "streak_loss": 0, "history_hits": 0} for i in range(11449)}
-        st.session_state['history'] = []
-        st.session_state['last_full_str'] = "0" * 107 # Tạo chuỗi giả để giữ cấu trúc
-        st.success("Đã tạo ma trận 11.449 dây trống! Giờ hãy quét kỳ 1.")
+        st.session_state['history'] = []; st.session_state['last_full_str'] = "0" * 107; st.success("Đã tạo trống!")
 
-    up_json = st.file_uploader("📥 Hoặc nạp JSON cũ", type=['json'])
+    up_json = st.file_uploader("📥 Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
         st.session_state['db'] = {str(k): v for k, v in data.get('matrix', data).items()}
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', "")
-        process_data_v108(); st.rerun()
+        process_data_v109(); st.rerun()
 
     st.divider()
     st.header("🎛️ BỘ LỌC")
-    f_an = st.slider("An:", 0, 10, (0, 3)) # Cho phép An từ 0
-    f_gan = st.slider("Gan:", 0, 50, (0, 50))
-    f_day = st.slider("Dây tối thiểu:", 0, 115, 0) # Mặc định 0 để thấy hết
-    f_hard = st.slider("Cứng min (%):", 0.0, 40.0, 0.0, 0.5)
-
+    f_an = st.slider("An:", 0, 10, (1, 3)); f_gan = st.slider("Gan:", 0, 50, (0, 50))
+    f_day = st.slider("Dây min:", 0, 115, 20); f_hard = st.slider("Cứng min (%):", 0.0, 40.0, 23.5, 0.5)
+    
     st.divider()
-    st.header("📸 QUÉT KẾT QUẢ")
+    st.header("📸 QUÉT KQ")
     up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
     if up_img and st.button("CHẠY OCR"):
         reader = load_ocr()
@@ -77,45 +98,46 @@ with st.sidebar:
         nums = [n for n in results if n.isdigit() and 2 <= len(n) <= 5]
         if nums: st.session_state['raw_input'] = ", ".join(nums); st.session_state['gdb_val'] = nums[0][-2:]
         st.rerun()
-    
-    st.session_state['raw_input'] = st.text_area("Dữ liệu 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
+    st.session_state['raw_input'] = st.text_area("27 giải:", value=st.session_state.get('raw_input', ""), height=80)
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
-    if st.button("🔥 PHÂN TÍCH KỲ TIẾP THEO"):
-        if not st.session_state.get('db'):
-            st.error("Bấm 'KHỞI TẠO MA TRẬN TRỐNG' trước đã mày!")
-        else:
-            raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
-            if len(raw_list) >= 27:
-                full_str_new = "".join(raw_list[:27])
-                loto_list = [n[-2:] for n in raw_list[:27]]
-                # Logic ánh xạ và cập nhật matrix (V8.5 huyền thoại)
-                curr_map = get_mapping_v10(st.session_state['last_full_str'])
-                new_db = st.session_state['db'].copy()
-                for i in range(11449):
-                    wid = str(i); wire = new_db[wid]
-                    num_f = curr_map.get(wid)
-                    if num_f in loto_list:
-                        wire["streak_loss"] = 0; wire["streak_win"] += 1; wire["history_hits"] += 1
-                        if num_f == st.session_state['gdb_val']: wire["score"] += 2.0
-                        wire["score"] += 1.5 if wire["streak_win"] < 4 else -0.5
-                    else:
-                        wire["streak_win"] = 0; wire["streak_loss"] += 1
-                        if wire["streak_loss"] >= 5: wire["score"] += 0.1
-                st.session_state['db'] = new_db
-                st.session_state['history'].insert(0, {"STT": len(st.session_state['history'])+1, "GĐB": st.session_state['gdb_val']})
-                st.session_state['last_full_str'] = full_str_new
-                process_data_v108(); st.rerun()
+    if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
+        raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
+        if len(raw_list) >= 27:
+            full_str_new = "".join(raw_list[:27])
+            loto_list = [n[-2:] for n in raw_list[:27]]
+            gdb_val = st.session_state['gdb_val']
+            
+            # 1. Đối soát lưu lịch sử TRƯỚC khi cập nhật matrix
+            history_entry = audit_history(loto_list, gdb_val)
+            st.session_state['history'].insert(0, history_entry)
+            
+            # 2. Cập nhật Matrix
+            curr_map = get_mapping_v10(st.session_state['last_full_str'])
+            new_db = st.session_state['db'].copy()
+            for i in range(11449):
+                wid = str(i); wire = new_db[wid]
+                num_f = curr_map.get(wid)
+                if num_f in loto_list:
+                    wire["streak_loss"] = 0; wire["streak_win"] += 1; wire["history_hits"] += 1
+                    if num_f == gdb_val: wire["score"] += 2.0
+                    wire["score"] += 1.5 if wire["streak_win"] < 4 else -0.5
+                else:
+                    wire["streak_win"] = 0; wire["streak_loss"] += 1
+                    if wire["streak_loss"] >= 5: wire["score"] += 0.1
+            st.session_state['db'] = new_db
+            st.session_state['last_full_str'] = full_str_new
+            process_data_v109(); st.rerun()
 
 # --- 3. HIỂN THỊ ---
 if st.session_state.get('df_raw') is not None:
-    df_all = st.session_state['df_raw'].sort_values("Điểm", ascending=False)
+    df_all = st.session_state['df_raw']
     df_f = df_all[(df_all["An"] >= f_an[0]) & (df_all["An"] <= f_an[1]) & (df_all["Nén"] >= f_gan[0]) & (df_all["Nén"] <= f_gan[1]) & (df_all["Dây"] >= f_day) & (df_all["Cứng(%)"] >= f_hard)].copy()
     
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1: st.metric("QUÂN LỌC", f"{len(df_f)} quân")
     with c2: st.code(", ".join(df_f.sort_values("Số")["Số"].tolist()) if not df_f.empty else "Dàn trống")
-    with c3: st.download_button("💾 LƯU FILE .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_genesis.json")
+    with c3: st.download_button("💾 XUẤT JSON V10.9", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v10_9.json")
 
     col_l, col_r = st.columns([1, 2.5])
     with col_l:
@@ -123,7 +145,5 @@ if st.session_state.get('df_raw') is not None:
         st.dataframe(df_f, use_container_width=True, height=400)
         with st.expander("📊 100 SỐ FULL"): st.dataframe(df_all, use_container_width=True)
     with col_r:
-        st.subheader("📜 LỊCH SỬ ĐỐI SOÁT")
+        st.subheader("📜 LỊCH SỬ ĐỐI SOÁT FULL (V8.5)")
         st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
-else:
-    st.info("💡 Mày muốn chơi từ đầu? Bấm 'KHỞI TẠO MA TRẬN TRỐNG' ở bên trái, sau đó quét kỳ 1 nhé!")
