@@ -5,23 +5,28 @@ import numpy as np
 import easyocr
 from PIL import Image
 
-# --- 1. KHỞI TẠO HỆ THỐNG V9.1 ---
+# --- 1. KHỞI TẠO HỆ THỐNG ---
 TOTAL_POS = 107 
 TOTAL_WIRES = TOTAL_POS * TOTAL_POS
-DEFAULT_SCORE = 100.0
+DEFAULT_SCORE = 100.0 # Mỗi dây 100 điểm đầu tiên theo ý mày
 
 if 'db' not in st.session_state:
+    # Khởi tạo 11.449 dây với 100 điểm gốc
     st.session_state['db'] = {str(i): {"score": DEFAULT_SCORE, "streak_win": 0, "streak_loss": 0, "history_hits": 0} for i in range(TOTAL_WIRES)}
 if 'history' not in st.session_state: st.session_state['history'] = []
 if 'final_scores' not in st.session_state: st.session_state['final_scores'] = None
+if 'hardness' not in st.session_state: st.session_state['hardness'] = None
+if 'compression' not in st.session_state: st.session_state['compression'] = None
 if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = None
 
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'])
 
-# --- HÀM MAPPING ĐỘNG ---
+# --- 2. CÁC HÀM CÔNG CỤ (Định nghĩa trước để tránh NameError) ---
+
 def get_mapping_v9(full_str):
+    """Ánh xạ động: Dây nối vị trí i-j tạo ra số gì"""
     if not full_str or len(full_str) < TOTAL_POS: return None
     mapping = {}
     for i in range(TOTAL_POS):
@@ -31,8 +36,8 @@ def get_mapping_v9(full_str):
             mapping[str(wire_id)] = num_formed
     return mapping
 
-# --- HÀM LÀM MỚI HIỂN THỊ (DYNAMIC REFRESH) ---
 def refresh_display_v9():
+    """Tính toán lại bảng hiển thị dựa trên trạng thái dây và kết quả kỳ cuối"""
     if not st.session_state['last_full_str']: return
     
     current_map = get_mapping_v9(st.session_state['last_full_str'])
@@ -44,63 +49,41 @@ def refresh_display_v9():
     temp_hrd = {f"{i:02d}": {"sum": 0.0, "count": 0} for i in range(100)}
 
     for wire_id, num_formed in current_map.items():
-        wire = db.get(wire_id, {"score": 100.0, "streak_win": 0, "streak_loss": 0, "history_hits": 0})
+        wire = db.get(wire_id, {"score": DEFAULT_SCORE, "streak_win": 0, "streak_loss": 0, "history_hits": 0})
         
-        # Sức mạnh dây
+        # Hệ số P thuận dòng: Dây đang nổ 1.5, dây đang trượt 0.7
         p_coef = 1.5 if wire["streak_win"] > 0 else 0.7
         num_power[num_formed] += (wire["score"] * p_coef)
         
-        # Độ nén (Lấy cực đại của dây trỏ về số đó)
         if wire["streak_loss"] > num_compression[num_formed]:
             num_compression[num_formed] = wire["streak_loss"]
             
-        # Độ cứng (Tần suất dây)
         eff = (wire["history_hits"] / total_periods * 100) if total_periods > 0 else 0
         temp_hrd[num_formed]["sum"] += eff
         temp_hrd[num_formed]["count"] += 1
 
-    hardness_map = {n: (temp_hrd[n]["sum"]/temp_hrd[n]["count"]) if temp_hrd[n]["count"] > 0 else 0 for n in num_power}
-    
+    st.session_state['hardness'] = {n: (temp_hrd[n]["sum"]/temp_hrd[n]["count"]) if temp_hrd[n]["count"] > 0 else 0 for n in num_power}
     st.session_state['final_scores'] = num_power
-    st.session_state['hardness'] = hardness_map
     st.session_state['compression'] = num_compression
 
-# --- THUẬT TOÁN CẬP NHẬT THEO DÂY ---
-def update_matrix_v9_1(raw_27_list, gdb_loto):
-    full_str = "".join(raw_27_list)
-    loto_list = [n[-2:] for n in raw_27_list]
-    
-    # Sử dụng mapping của kỳ TRƯỚC để tính Win/Loss cho DÂY
-    if not st.session_state['last_full_str']:
-        # Nếu là kỳ đầu tiên, khởi tạo mapping tĩnh tạm thời để có dữ liệu
-        st.session_state['last_full_str'] = full_str
-        
-    current_map = get_mapping_v9(st.session_state['last_full_str'])
-    new_db = json.loads(json.dumps(st.session_state['db']))
-    
-    for wire_id, num_formed in current_map.items():
-        wire = new_db[wire_id]
-        is_hit = num_formed in loto_list
-        is_gdb = (num_formed == gdb_loto)
+def get_current_df():
+    """Hàm lấy DataFrame hiện tại để đối soát hạng"""
+    if st.session_state.get('final_scores'):
+        df = pd.DataFrame([
+            {
+                "Số": n, 
+                "Điểm": p, 
+                "Cứng(%)": round(st.session_state['hardness'].get(n, 0), 1), 
+                "Nén": st.session_state['compression'].get(n, 0)
+            } 
+            for n, p in st.session_state['final_scores'].items()
+        ])
+        return df
+    return None
 
-        if is_hit:
-            wire["streak_loss"] = 0
-            wire["streak_win"] += 1
-            wire["history_hits"] += 1
-            if is_gdb: wire["score"] += 2.0
-            wire["score"] += float(loto_list.count(num_formed)) * 2.0 if wire["streak_win"] < 4 else -0.5
-        else:
-            wire["streak_win"] = 0
-            wire["streak_loss"] += 1
-            if wire["streak_loss"] >= 4: wire["score"] += 0.1
-
-    st.session_state['db'] = new_db
-    st.session_state['last_full_str'] = full_str # Cập nhật full_str mới cho kỳ sau
-    refresh_display_v9()
-
-# --- 2. GIAO DIỆN ---
-st.set_page_config(page_title="Matrix V9.1 Master", layout="wide")
-st.markdown("<h2 style='text-align: center; color: #00FFFF;'>🌐 MATRIX V9.1 - MASTER DYNAMIC MAPPING</h2>", unsafe_allow_html=True)
+# --- 3. GIAO DIỆN & XỬ LÝ ---
+st.set_page_config(page_title="Matrix V9.2 Master", layout="wide")
+st.markdown("<h2 style='text-align: center; color: #00FFFF;'>🌐 MATRIX V9.2 - MASTER DYNAMIC MAPPING</h2>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("📂 HỆ THỐNG")
@@ -115,80 +98,109 @@ with st.sidebar:
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', None)
         refresh_display_v9()
-        st.success("Đã nạp dữ liệu!")
+        st.success("Đã phục hồi ma trận!")
         st.rerun()
 
     st.divider()
     st.header("📸 QUÉT KQ")
-    up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'jpeg', 'png'])
-    if up_img and st.button("BẮT ĐẦU QUÉT OCR"):
-        with st.spinner("Đang nhận diện số..."):
-            reader = load_ocr()
-            results = reader.readtext(np.array(Image.open(up_img)), detail=0)
-            nums = [n for n in results if n.isdigit() and 2 <= len(n) <= 5]
-            if nums:
-                st.session_state['raw_input'] = ", ".join(nums)
-                st.session_state['gdb_val'] = nums[0][-2:]
+    up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
+    if up_img and st.button("OCR"):
+        reader = load_ocr()
+        results = reader.readtext(np.array(Image.open(up_img)), detail=0)
+        nums = [n for n in results if n.isdigit() and 2 <= len(n) <= 5]
+        if nums:
+            st.session_state['raw_input'] = ", ".join(nums)
+            st.session_state['gdb_val'] = nums[0][-2:]
         st.rerun()
 
-    st.session_state['raw_input'] = st.text_area("Nhập 27 giải (cách nhau):", value=st.session_state.get('raw_input', ""), height=100)
+    st.session_state['raw_input'] = st.text_area("27 giải:", value=st.session_state.get('raw_input', ""), height=100)
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""), max_chars=2)
 
     if st.button("🔥 PHÂN TÍCH ÁNH XẠ"):
         raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
         if len(raw_list) >= 27:
-            # Lấy data cũ đối soát
-            old_df = get_display_data_v9_tmp() # Hàm hỗ trợ lấy df hiện tại
+            full_str_new = "".join(raw_list[:27])
+            loto_list = [n[-2:] for n in raw_list[:27]]
             
-            update_matrix_v9_1(raw_list[:27], st.session_state['gdb_val'])
+            # A. Đối soát hạng dựa trên bảng ĐÃ CÓ (Kỳ trước)
+            old_df = get_current_df()
             
-            # Ghi lịch sử
-            slices = {"T5": (0,5), "T10": (5,10), "T20": (10,20), "T50": (20,50), "Cao": (95,100)}
-            def get_hit_str(targets, res_loto):
-                hits = [n for n in targets if n in res_loto]
-                return f"{len(hits)}({','.join(hits)})" if hits else "0"
+            # B. Cập nhật win/loss cho DÂY (Dùng mapping của kỳ trước đó)
+            if not st.session_state['last_full_str']:
+                st.session_state['last_full_str'] = full_str_new
+                
+            current_map = get_mapping_v9(st.session_state['last_full_str'])
+            new_db = json.loads(json.dumps(st.session_state['db']))
             
+            for wire_id, num_formed in current_map.items():
+                wire = new_db[wire_id]
+                is_hit = num_formed in loto_list
+                is_gdb = (num_formed == st.session_state['gdb_val'])
+
+                if is_hit:
+                    wire["streak_loss"] = 0
+                    wire["streak_win"] += 1
+                    wire["history_hits"] += 1
+                    if is_gdb: wire["score"] += 2.0
+                    wire["score"] += float(loto_list.count(num_formed)) * 2.0 if wire["streak_win"] < 4 else -0.5
+                else:
+                    wire["streak_win"] = 0
+                    wire["streak_loss"] += 1
+                    if wire["streak_loss"] >= 4: wire["score"] += 0.1
+
+            st.session_state['db'] = new_db
+            st.session_state['last_full_str'] = full_str_new
+            refresh_display_v9()
+            
+            # C. Ghi lịch sử
             if old_df is not None:
-                v_loto = [n[-2:] for n in raw_list[:27]]
-                res = {"STT": len(st.session_state['history'])+1, "GĐB": st.session_state['gdb_val']}
                 df_sorted_old = old_df.sort_values('Điểm', ascending=False).reset_index(drop=True)
-                for k, (s, e) in slices.items():
-                    res[k] = get_hit_str(df_sorted_old.iloc[s:e]['Số'].tolist(), v_loto)
-                st.session_state['history'].insert(0, res)
+                slices = {"T5": (0,5), "T10": (5,10), "T20": (10,20), "T50": (20,50), "Cao": (95,100)}
+                def check_hit(targets, res):
+                    hits = [n for n in targets if n in res]
+                    return f"{len(hits)}({','.join(hits)})" if hits else "0"
+                
+                rank_gdb = "-"
+                try: rank_gdb = df_sorted_old[df_sorted_old['Số'] == st.session_state['gdb_val']].index[0]
+                except: pass
+
+                history_entry = {"STT": len(st.session_state['history'])+1, "GĐB": st.session_state['gdb_val'], "Hạng": rank_gdb}
+                for label, (s, e) in slices.items():
+                    history_entry[label] = check_hit(df_sorted_old.iloc[s:e]['Số'].tolist(), loto_list)
+                st.session_state['history'].insert(0, history_entry)
+            
             st.rerun()
 
-def get_display_data_v9_tmp():
-    if st.session_state.get('final_scores'):
-        df = pd.DataFrame([{"Số": n, "Điểm": p, "Cứng(%)": round(st.session_state['hardness'][n], 1), "Nén": st.session_state['compression'][n]} for n, p in st.session_state['final_scores'].items()])
-        return df
-    return None
-
-# --- 3. HIỂN THỊ ---
-df_disp = get_display_data_v9_tmp()
-if df_disp is not None:
+# --- 4. HIỂN THỊ ---
+df_final = get_current_df()
+if df_final is not None:
     c1, c2 = st.columns([1.6, 3.4])
+    
+    # Tính Icon Trạng thái
+    top_scores = sorted(df_final['Điểm'].unique(), reverse=True)[:3]
+    def set_icon(row):
+        if row['Nén'] > 18: return "🧨"
+        if row['Điểm'] in top_scores: return "🚀"
+        if row['Cứng(%)'] > df_final['Cứng(%)'].mean(): return "🔋"
+        return "✅"
+    df_final['T.Thái'] = df_final.apply(set_icon, axis=1)
+    df_sorted = df_final.sort_values('Điểm', ascending=False).reset_index(drop=True)
+
     with c1:
-        st.subheader("📊 TỔNG LỰC ĐỘNG")
-        top_scores = sorted(df_disp['Điểm'].unique(), reverse=True)[:3]
-        def set_status(row):
-            if row['Nén'] > 18: return "🧨"
-            if row['Điểm'] in top_scores: return "🚀"
-            if row['Cứng(%)'] > df_disp['Cứng(%)'].mean(): return "🔋"
-            return "✅"
-        df_disp['T.Thái'] = df_disp.apply(set_status, axis=1)
-        st.dataframe(df_disp.sort_values('Điểm', ascending=False).reset_index(drop=True), use_container_width=True, height=600)
+        st.subheader("📊 TỔNG LỰC DÂY (ĐIỂM GỐC 100)")
+        st.dataframe(df_sorted, use_container_width=True, height=600)
 
     with c2:
-        st.subheader("📜 LỊCH SỬ CUỘN NGƯỢC")
+        st.subheader("📜 ĐỐI SOÁT ÁNH XẠ")
         st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True)
         st.divider()
         col_a, col_b = st.columns(2)
         with col_a:
-            st.subheader("🎯 TOP 5 LÒ XO CĂNG")
-            st.table(df_disp.sort_values('Nén', ascending=False).head(5)[['Số', 'Nén', 'Điểm']])
+            st.subheader("🎯 LÒ XO NÉN CĂNG")
+            st.table(df_sorted.sort_values('Nén', ascending=False).head(5)[['Số', 'Nén', 'Điểm']])
         with col_b:
-            st.subheader("💾 LƯU TRỮ")
+            st.subheader("💾 DỮ LIỆU")
             save_data = {"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}
-            st.download_button("💾 XUẤT JSON", data=json.dumps(save_data), file_name="matrix_v9_1.json")
+            st.download_button("💾 XUẤT JSON", data=json.dumps(save_data), file_name="matrix_v9_2.json")
             num = st.number_input("Trích Top:", 1, 100, 10)
-            st.code(", ".join(df_disp.sort_values('Điểm', ascending=False).head(num)['Số'].tolist()))
+            st.code(", ".join(df_sorted.head(num)['Số'].tolist()))
