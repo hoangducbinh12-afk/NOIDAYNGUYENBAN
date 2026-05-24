@@ -28,34 +28,35 @@ def process_data_v11_8():
         wire = db.get(str(wire_id), {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": []})
         s = stats[num]
         s["wire_count"] += 1
+        # Lấy lịch sử 10 kỳ để tính độ cứng phong độ
         s["window_hits"] += sum(wire.get("hit_history", [])[-WINDOW:])
         s["total_score"] += wire.get("score", 1000.0) 
         if wire.get("streak_win", 0) > s["max_an"]: s["max_an"] = wire.get("streak_win", 0)
         if wire.get("streak_loss", 0) > s["max_gan"]: s["max_gan"] = wire.get("streak_loss", 0)
 
     data_list = []
-    denominator = WINDOW * AVG_WIRES 
+    denominator = WINDOW * AVG_WIRES # 1145
     for num, s in stats.items():
         do_cung_10 = s["window_hits"] / denominator if denominator > 0 else 0
         avg_score_db = s["total_score"] / s["wire_count"] if s["wire_count"] > 0 else 1000.0
+        # CÔNG THỨC: Điểm = Gốc + (Gốc * %Độ cứng)
         final_score = avg_score_db + (avg_score_db * do_cung_10)
         
         data_list.append({
             "Số": num, "Điểm": round(final_score, 2), "An": s["max_an"], 
             "Nén": s["max_gan"], "Dây": s["wire_count"], "Cứng(10k)": round(do_cung_10 * 100, 2)
         })
-    # Lưu bảng gốc để audit rank
     st.session_state['df_raw'] = pd.DataFrame(data_list).sort_values("Điểm", ascending=False).reset_index(drop=True)
 
 def audit_history(loto_list, gdb):
     if 'df_raw' not in st.session_state: return {"STT": len(st.session_state['history'])+1, "GĐB": gdb}
     df = st.session_state['df_raw']
     
-    # TÍNH TOÁN RANK VÀ AN CHO GĐB
+    # TRUY VẾT RANK VÀ AN CHO GĐB
     gdb_info = gdb
     if gdb in df['Số'].values:
         row = df[df['Số'] == gdb]
-        rank = row.index[0] + 1 # Lấy hạng (index + 1)
+        rank = row.index[0] + 1
         max_an = row['An'].values[0]
         gdb_info = f"{gdb} (R{rank}-A{max_an})"
     
@@ -114,7 +115,7 @@ with st.sidebar:
             raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
             if len(raw_list) >= 27:
                 loto_list = [n[-2:] for n in raw_list[:27]]; gdb_val = st.session_state['gdb_val']
-                # PHẢI CHẠY AUDIT TRƯỚC KHI UPDATE DB MỚI
+                # Chạy audit trước khi update điểm để lấy rank trước giờ quay
                 st.session_state['history'].insert(0, audit_history(loto_list, gdb_val))
                 
                 curr_map = get_mapping_v11(st.session_state['last_full_str'])
@@ -122,25 +123,36 @@ with st.sidebar:
                 for i in range(11449):
                     wid = str(i); wire = new_db[wid]
                     num_f = curr_map.get(wid)
+                    if "hit_history" not in wire: wire["hit_history"] = []
                     if num_f in loto_list:
                         n_hits = loto_list.count(num_f)
-                        wire["score"] += (4.0 * n_hits) 
+                        wire["score"] += (4.0 * n_hits) # Cân bằng +4
                         wire["streak_loss"] = 0; wire["streak_win"] += 1; wire["hit_history"].append(1)
                     else:
-                        wire["score"] -= 1.0 
+                        wire["score"] -= 1.0 # Cân bằng -1
                         wire["streak_win"] = 0; wire["streak_loss"] += 1; wire["hit_history"].append(0)
                     wire["hit_history"] = wire["hit_history"][-WINDOW:]
                 
                 st.session_state['db'] = new_db; st.session_state['last_full_str'] = "".join(raw_list[:27])
                 process_data_v11_8(); st.rerun()
 
-# --- 3. HIỂN THỊ ---
+# --- 3. HIỂN THỊ KẾT QUẢ ---
 if st.session_state.get('df_raw') is not None:
     df_all = st.session_state['df_raw']
     df_f = df_all[(df_all["An"] >= f_an[0]) & (df_all["An"] <= f_an[1]) & (df_all["Nén"] >= f_gan[0]) & (df_all["Nén"] <= f_gan[1]) & (df_all["Dây"] >= f_day) & (df_all["Cứng(10k)"] >= f_hard)].copy()
+    
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1: st.metric("SỐ QUÂN LỌC", f"{len(df_f)} quân")
     with c2: st.code(", ".join(df_f.sort_values("Số")["Số"].tolist()) if not df_f.empty else "Trống")
     with c3: st.download_button("💾 XUẤT JSON V11.8", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_final_v11_8.json")
+    
     st.divider()
-    col_l, col_r = st.columns(
+    col_l, col_r = st.columns([1, 2.5]) # Fix dấu ngoặc ở đây
+    with col_l:
+        st.subheader("🎯 CHI TIẾT LỌC")
+        st.dataframe(df_f, use_container_width=True, height=450)
+        with st.expander("📊 BẢNG FULL"): 
+            st.dataframe(df_all, use_container_width=True)
+    with col_r:
+        st.subheader("📜 LỊCH SỬ (GĐB Rank-An)")
+        st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
