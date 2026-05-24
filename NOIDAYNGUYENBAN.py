@@ -5,10 +5,10 @@ import numpy as np
 import easyocr
 from PIL import Image
 
-# --- 1. THIẾT LẬP HỆ THỐNG ---
+# --- 1. CẤU HÌNH HỆ THỐNG ---
 TOTAL_POS = 107 
 AVG_WIRES = 114.5
-WINDOW = 10 # Cửa sổ phong độ 10 kỳ
+WINDOW = 10 
 
 @st.cache_resource
 def load_ocr():
@@ -18,7 +18,7 @@ def get_mapping_v11(full_str):
     if not full_str or len(full_str) < TOTAL_POS: return None
     return {str(i * TOTAL_POS + j): f"{full_str[i]}{full_str[j]}" for i in range(TOTAL_POS) for j in range(TOTAL_POS)}
 
-def process_data_v11_7():
+def process_data_v11_8():
     if not st.session_state.get('last_full_str') or not st.session_state.get('db'): return
     current_map = get_mapping_v11(st.session_state['last_full_str'])
     db = st.session_state['db']
@@ -34,25 +34,33 @@ def process_data_v11_7():
         if wire.get("streak_loss", 0) > s["max_gan"]: s["max_gan"] = wire.get("streak_loss", 0)
 
     data_list = []
-    denominator = WINDOW * AVG_WIRES # 1145
+    denominator = WINDOW * AVG_WIRES 
     for num, s in stats.items():
-        # A. Độ cứng phong độ (10 kỳ)
         do_cung_10 = s["window_hits"] / denominator if denominator > 0 else 0
-        # B. Điểm trung bình gốc từ DB
         avg_score_db = s["total_score"] / s["wire_count"] if s["wire_count"] > 0 else 1000.0
-        # C. CÔNG THỨC XẾP HẠNG: Gốc + (Gốc * %Độ cứng)
         final_score = avg_score_db + (avg_score_db * do_cung_10)
         
         data_list.append({
             "Số": num, "Điểm": round(final_score, 2), "An": s["max_an"], 
             "Nén": s["max_gan"], "Dây": s["wire_count"], "Cứng(10k)": round(do_cung_10 * 100, 2)
         })
+    # Lưu bảng gốc để audit rank
     st.session_state['df_raw'] = pd.DataFrame(data_list).sort_values("Điểm", ascending=False).reset_index(drop=True)
 
 def audit_history(loto_list, gdb):
     if 'df_raw' not in st.session_state: return {"STT": len(st.session_state['history'])+1, "GĐB": gdb}
     df = st.session_state['df_raw']
-    res = {"STT": len(st.session_state['history'])+1, "GĐB": gdb}
+    
+    # TÍNH TOÁN RANK VÀ AN CHO GĐB
+    gdb_info = gdb
+    if gdb in df['Số'].values:
+        row = df[df['Số'] == gdb]
+        rank = row.index[0] + 1 # Lấy hạng (index + 1)
+        max_an = row['An'].values[0]
+        gdb_info = f"{gdb} (R{rank}-A{max_an})"
+    
+    res = {"STT": len(st.session_state['history'])+1, "GĐB": gdb_info}
+    
     thresholds = [5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100]
     prev_t = 0
     for t in thresholds:
@@ -62,9 +70,9 @@ def audit_history(loto_list, gdb):
         prev_t = t
     return res
 
-# --- GIAO DIỆN STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Matrix Final V11.7")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix Final V11.7</h1>", unsafe_allow_html=True)
+# --- GIAO DIỆN CHÍNH ---
+st.set_page_config(layout="wide", page_title="Matrix Final V11.8")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix Final V11.8</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -82,7 +90,7 @@ with st.sidebar:
         st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', "")
-        process_data_v11_7(); st.rerun()
+        process_data_v11_8(); st.rerun()
 
     st.divider()
     st.header("🎛️ BỘ LỌC")
@@ -105,26 +113,26 @@ with st.sidebar:
         else:
             raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
             if len(raw_list) >= 27:
-                full_str_new = "".join(raw_list[:27]); loto_list = [n[-2:] for n in raw_list[:27]]; gdb_val = st.session_state['gdb_val']
+                loto_list = [n[-2:] for n in raw_list[:27]]; gdb_val = st.session_state['gdb_val']
+                # PHẢI CHẠY AUDIT TRƯỚC KHI UPDATE DB MỚI
                 st.session_state['history'].insert(0, audit_history(loto_list, gdb_val))
+                
                 curr_map = get_mapping_v11(st.session_state['last_full_str'])
                 new_db = st.session_state['db'].copy()
                 for i in range(11449):
                     wid = str(i); wire = new_db[wid]
                     num_f = curr_map.get(wid)
-                    if "hit_history" not in wire: wire["hit_history"] = []
                     if num_f in loto_list:
                         n_hits = loto_list.count(num_f)
-                        # CƠ CHẾ CÂN BẰNG: Nổ +4 mỗi nháy
                         wire["score"] += (4.0 * n_hits) 
                         wire["streak_loss"] = 0; wire["streak_win"] += 1; wire["hit_history"].append(1)
                     else:
-                        # CƠ CHẾ CÂN BẰNG: Trượt -1
                         wire["score"] -= 1.0 
                         wire["streak_win"] = 0; wire["streak_loss"] += 1; wire["hit_history"].append(0)
                     wire["hit_history"] = wire["hit_history"][-WINDOW:]
-                st.session_state['db'] = new_db; st.session_state['last_full_str'] = full_str_new
-                process_data_v11_7(); st.rerun()
+                
+                st.session_state['db'] = new_db; st.session_state['last_full_str'] = "".join(raw_list[:27])
+                process_data_v11_8(); st.rerun()
 
 # --- 3. HIỂN THỊ ---
 if st.session_state.get('df_raw') is not None:
@@ -133,11 +141,6 @@ if st.session_state.get('df_raw') is not None:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1: st.metric("SỐ QUÂN LỌC", f"{len(df_f)} quân")
     with c2: st.code(", ".join(df_f.sort_values("Số")["Số"].tolist()) if not df_f.empty else "Trống")
-    with c3: st.download_button("💾 XUẤT JSON V11.7", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_final_v11_7.json")
+    with c3: st.download_button("💾 XUẤT JSON V11.8", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_final_v11_8.json")
     st.divider()
-    col_l, col_r = st.columns([1, 2.5])
-    with col_l:
-        st.subheader("🎯 CHI TIẾT LỌC"); st.dataframe(df_f, use_container_width=True, height=450)
-        with st.expander("📊 BẢNG FULL"): st.dataframe(df_all, use_container_width=True)
-    with col_r:
-        st.subheader("📜 LỊCH SỬ ĐỐI SOÁT"); st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
+    col_l, col_r = st.columns(
