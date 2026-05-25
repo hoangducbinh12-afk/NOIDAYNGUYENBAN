@@ -18,19 +18,16 @@ def get_mapping_v11(full_str):
     if not full_str or len(full_str) < TOTAL_POS: return None
     return {str(i * TOTAL_POS + j): f"{full_str[i]}{full_str[j]}" for i in range(TOTAL_POS) for j in range(TOTAL_POS)}
 
-# Hàm tính Tầng dựa trên ngưỡng % (Linh hồn của bản V13.9)
 def calculate_tier(losses, threshold_pct):
     if not losses: return 0
     losses_sorted = sorted(losses, reverse=True)
     idx = int(len(losses_sorted) * (threshold_pct / 100)) - 1
     return losses_sorted[max(0, idx)]
 
-def process_data_v13_9():
+def process_data_v13_10():
     if not st.session_state.get('last_full_str') or not st.session_state.get('db'): return
     current_map = get_mapping_v11(st.session_state['last_full_str'])
     db = st.session_state['db']
-    
-    # Lấy giá trị từ thanh trượt để tính toán
     threshold_pct = st.session_state.get('f_strict_val', 71)
     
     stats = {f"{i:02d}": {
@@ -50,9 +47,11 @@ def process_data_v13_9():
         if s_win > s["max_an"]: s["max_an"] = s_win
         if s_loss > s["max_gan"]: s["max_gan"] = s_loss
         
+        # Luôn tính hit_history để đo độ cứng, bất kể dây sạch hay không
+        s["clean_window_hits"] += sum(wire.get("hit_history", [])[-WINDOW:])
+        
         if s_win == 0:
             s["clean_wire_count"] += 1
-            s["clean_window_hits"] += sum(wire.get("hit_history", [])[-WINDOW:])
             s["total_score"] += wire.get("score", 1000.0) 
 
     data_list = []
@@ -60,9 +59,7 @@ def process_data_v13_9():
     for num, s in stats.items():
         if s["clean_wire_count"] == 0: continue 
         
-        # TÍNH TẦNG THEO THỜI GIAN THỰC
         tang_val = calculate_tier(s["all_losses"], threshold_pct)
-        
         avg_score_db = s["total_score"] / s["clean_wire_count"]
         do_cung_10 = s["clean_window_hits"] / denominator if denominator > 0 else 0
         final_score = avg_score_db + (avg_score_db * do_cung_10)
@@ -90,7 +87,8 @@ def audit_history(loto_list, gdb):
     gdb_info = gdb
     if gdb in df['Số'].values:
         row = df[df['Số'] == gdb]
-        gdb_info = f"{gdb} (R{row['Rank'].values[0]}-A{row['An'].values[0]}-D{row['DâySạch'].values[0]}-T{row['Tang'].values[0]})"
+        # UPDATE: Thêm C vào định dạng lịch sử (Rank-An-DaySach-Tang-Cung)
+        gdb_info = f"{gdb} (R{row['Rank'].values[0]}-A{row['An'].values[0]}-D{row['DâySạch'].values[0]}-T{row['Tang'].values[0]}-C{int(row['Cứng(10k)'].values[0])})"
     
     res = {"STT": len(st.session_state['history'])+1, "GĐB": gdb_info}
     thresholds = [5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -103,8 +101,8 @@ def audit_history(loto_list, gdb):
     return res
 
 # --- GIAO DIỆN ---
-st.set_page_config(layout="wide", page_title="Matrix V13.9 Real-time")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix Final V13.9</h1>", unsafe_allow_html=True)
+st.set_page_config(layout="wide", page_title="Matrix V13.9 Hardness Tracker")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix Final V13.10</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -125,23 +123,19 @@ with st.sidebar:
         st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', "")
-        process_data_v13_9(); st.rerun()
+        process_data_v13_10(); st.rerun()
 
     st.divider()
     st.header("🎛️ BỘ LỌC BIẾN THIÊN")
-    
-    # KHI KÉO THANH NÀY, HÀM PROCESS SẼ CHẠY LẠI
-    st.session_state['f_strict_val'] = st.slider("Độ khắt khe Tầng (%):", 50, 100, 71, on_change=process_data_v13_9)
-    
+    st.session_state['f_strict_val'] = st.slider("Độ khắt khe Tầng (%):", 50, 100, 71)
     f_rank = st.slider("Hạng (Rank):", 0, 100, (0, 89))
-    f_an = st.slider("An thông (Ngày):", 0, 15, (0, 3))
+    f_an = st.slider("An thông (Ngày):", 0, 15, (0, 4))
     f_tang_min = st.slider("Tầng tối thiểu (T):", 0, 10, 1)
     f_day = st.slider("Khoảng Dây Sạch (D):", 0, 250, (45, 115))
-    f_hard = st.slider("Cứng(10k) %:", 0.0, 100.0, 5.0, 1.0)
+    f_hard = st.slider("Cứng(10k) %:", 0.0, 100.0, 10.0, 1.0)
     
     st.divider()
-    # Nút bấm thủ công nếu muốn cưỡng bức tính toán
-    if st.button("🔄 CẬP NHẬT BẢNG THEO %"): process_data_v13_9(); st.rerun()
+    if st.button("🔄 CẬP NHẬT BẢNG"): process_data_v13_10(); st.rerun()
 
     st.header("📸 QUÉT KQ")
     up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
@@ -163,6 +157,7 @@ with st.sidebar:
             raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
             if len(raw_list) >= 27:
                 loto_list = [n[-2:] for n in raw_list[:27]]; gdb_val = st.session_state['gdb_val']
+                # Ghi lịch sử trước khi cập nhật DB để lấy Rank/Tầng/Cứng của ngày hôm đó
                 new_entry = audit_history(loto_list, gdb_val)
                 if new_entry: st.session_state['history'].insert(0, new_entry)
                 
@@ -187,7 +182,7 @@ with st.sidebar:
                         wire["streak_win"] = 0; wire["streak_loss"] = s_loss; wire["hit_history"].append(0)
                     wire["hit_history"] = wire["hit_history"][-WINDOW:]
                 st.session_state['db'] = new_db; st.session_state['last_full_str'] = "".join(raw_list[:27])
-                process_data_v13_9(); st.rerun()
+                process_data_v13_10(); st.rerun()
 
 # --- 3. HIỂN THỊ ---
 if st.session_state.get('df_raw') is not None:
@@ -203,7 +198,7 @@ if st.session_state.get('df_raw') is not None:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1: st.metric("DÀN TINH KHIẾT", f"{len(df_f)} quân")
     with c2: st.code(", ".join(df_f.sort_values("Số")["Số"].tolist()) if not df_f.empty else "Dàn trống")
-    with c3: st.download_button("💾 XUẤT JSON V13.9", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_9.json")
+    with c3: st.download_button("💾 XUẤT JSON V13.10", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_10.json")
     
     st.divider()
     col_l, col_r = st.columns([1, 2.5])
@@ -211,5 +206,5 @@ if st.session_state.get('df_raw') is not None:
         st.subheader(f"🎯 BẢNG LỌC ({st.session_state['f_strict_val']}%)")
         st.dataframe(df_f, use_container_width=True, height=500, hide_index=True)
     with col_r:
-        st.subheader("📜 TRUY VẾT GĐB (Rank-An-DaySach-Tang)")
+        st.subheader("📜 TRUY VẾT GĐB (R-A-D-T-C)")
         st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
