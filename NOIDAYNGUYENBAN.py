@@ -18,22 +18,40 @@ def get_mapping_v11(full_str):
     if not full_str or len(full_str) < TOTAL_POS: return None
     return {str(i * TOTAL_POS + j): f"{full_str[i]}{full_str[j]}" for i in range(TOTAL_POS) for j in range(TOTAL_POS)}
 
-def process_data_v13_4():
+def calculate_tier(losses, threshold_pct):
+    if not losses: return 0
+    losses_sorted = sorted(losses, reverse=True)
+    # Tìm mốc mà X% số dây đạt được (ví dụ 80% dây trượt ít nhất n ngày)
+    idx = int(len(losses_sorted) * (threshold_pct / 100)) - 1
+    return losses_sorted[max(0, idx)]
+
+def process_data_v13_8():
     if not st.session_state.get('last_full_str') or not st.session_state.get('db'): return
     current_map = get_mapping_v11(st.session_state['last_full_str'])
     db = st.session_state['db']
+    threshold_pct = st.session_state.get('f_strict', 80)
     
-    stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "max_gan": 0, "clean_wire_count": 0, "clean_window_hits": 0} for i in range(100)}
+    # stats giữ nguyên logic V13.4
+    stats = {f"{i:02d}": {
+        "total_score": 0.0, "max_an": 0, "max_gan": 0, 
+        "clean_wire_count": 0, "clean_window_hits": 0,
+        "all_losses": []
+    } for i in range(100)}
     
     for wire_id, num in current_map.items():
         wire = db.get(str(wire_id), {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": []})
         s = stats[num]
         
-        if wire.get("streak_win", 0) > s["max_an"]: s["max_an"] = wire.get("streak_win", 0)
-        if wire.get("streak_loss", 0) > s["max_gan"]: s["max_gan"] = wire.get("streak_loss", 0)
+        s_win = wire.get("streak_win", 0)
+        s_loss = wire.get("streak_loss", 0)
         
-        # CHỈ TÍNH ĐIỂM CHO DÂY SẠCH
-        if wire.get("streak_win", 0) == 0:
+        # Ghi lại streak_loss để tính Tầng (Nếu thắng thì coi như nén bằng 0)
+        s["all_losses"].append(s_loss if s_win == 0 else 0)
+        
+        if s_win > s["max_an"]: s["max_an"] = s_win
+        if s_loss > s["max_gan"]: s["max_gan"] = s_loss
+        
+        if s_win == 0:
             s["clean_wire_count"] += 1
             s["clean_window_hits"] += sum(wire.get("hit_history", [])[-WINDOW:])
             s["total_score"] += wire.get("score", 1000.0) 
@@ -43,11 +61,14 @@ def process_data_v13_4():
     for num, s in stats.items():
         if s["clean_wire_count"] == 0: continue 
         
+        # TÍNH TẦNG THEO NGƯỠNG %
+        tang_val = calculate_tier(s["all_losses"], threshold_pct)
+        
         avg_score_db = s["total_score"] / s["clean_wire_count"]
         do_cung_10 = s["clean_window_hits"] / denominator if denominator > 0 else 0
         final_score = avg_score_db + (avg_score_db * do_cung_10)
         
-        # TURBO BOOST (ÉP RANK)
+        # Turbo Boost V13.4
         m_an = s["max_an"]
         multiplier = 1.0
         if m_an == 3: multiplier = 1.15
@@ -57,7 +78,8 @@ def process_data_v13_4():
         
         data_list.append({
             "Số": num, "Điểm": round(final_score, 2), "An": s["max_an"], 
-            "Gan": s["max_gan"], "DâySạch": s["clean_wire_count"], "Cứng(10k)": round(do_cung_10 * 100, 2)
+            "Gan": s["max_gan"], "Tang": tang_val, "DâySạch": s["clean_wire_count"], 
+            "Cứng(10k)": round(do_cung_10 * 100, 2)
         })
         
     df_raw = pd.DataFrame(data_list).sort_values("Điểm", ascending=False).reset_index(drop=True)
@@ -70,10 +92,8 @@ def audit_history(loto_list, gdb):
     gdb_info = gdb
     if gdb in df['Số'].values:
         row = df[df['Số'] == gdb]
-        rank = row['Rank'].values[0]
-        an = row['An'].values[0]
-        ds = row['DâySạch'].values[0]
-        gdb_info = f"{gdb} (R{rank}-A{an}-D{ds})"
+        # Hiển thị lịch sử: GDB (R-A-D-T)
+        gdb_info = f"{gdb} (R{row['Rank'].values[0]}-A{row['An'].values[0]}-D{row['DâySạch'].values[0]}-T{row['Tang'].values[0]})"
     
     res = {"STT": len(st.session_state['history'])+1, "GĐB": gdb_info}
     thresholds = [5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -86,8 +106,8 @@ def audit_history(loto_list, gdb):
     return res
 
 # --- GIAO DIỆN ---
-st.set_page_config(layout="wide", page_title="Matrix V13.4 Precision")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix Final V13.4</h1>", unsafe_allow_html=True)
+st.set_page_config(layout="wide", page_title="Matrix V13.8 Tower")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix Final V13.8</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -108,21 +128,23 @@ with st.sidebar:
         st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', "")
-        process_data_v13_4(); st.rerun()
+        process_data_v13_8(); st.rerun()
 
     st.divider()
     st.header("🎛️ BỘ LỌC CHIẾN THUẬT")
     f_rank = st.slider("Hạng (Rank):", 1, 100, (1, 20))
     f_an = st.slider("An thông (Ngày):", 0, 15, (0, 3))
     
-    # CHỈNH VỀ MAX 250 ĐỂ DỄ KÉO CHÍNH XÁC
-    f_day = st.slider("Khoảng Dây Sạch (D):", 0, 250, (20, 150))
+    # BỘ LỌC TẦNG & ĐỘ KHẮT KHE
+    st.session_state['f_strict'] = st.slider("Độ khắt khe Tầng (% dây sạch):", 50, 100, 80)
+    f_tang = st.slider("Tầng tối thiểu (T):", 0, 10, 0)
     
+    f_day = st.slider("Khoảng Dây Sạch (D):", 0, 250, (20, 150))
     f_hard = st.slider("Cứng(10k) %:", 0.0, 100.0, 10.0, 1.0)
     
     st.divider()
     st.header("📸 QUÉT KQ")
-    up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'jpeg', 'png'])
+    up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
     if up_img and st.button("🚀 CHẠY OCR"):
         reader = load_ocr()
         results = reader.readtext(np.array(Image.open(up_img)), detail=0)
@@ -136,7 +158,7 @@ with st.sidebar:
     st.session_state['gdb_val'] = st.text_input("GĐB (2 số):", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        if not st.session_state.get('db'): st.error("Nạp data trước!")
+        if not st.session_state.get('db'): st.error("Nạp data!")
         else:
             raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
             if len(raw_list) >= 27:
@@ -165,7 +187,7 @@ with st.sidebar:
                         wire["streak_win"] = 0; wire["streak_loss"] = s_loss; wire["hit_history"].append(0)
                     wire["hit_history"] = wire["hit_history"][-WINDOW:]
                 st.session_state['db'] = new_db; st.session_state['last_full_str'] = "".join(raw_list[:27])
-                process_data_v13_4(); st.rerun()
+                process_data_v13_8(); st.rerun()
 
 # --- 3. HIỂN THỊ ---
 if st.session_state.get('df_raw') is not None:
@@ -173,20 +195,21 @@ if st.session_state.get('df_raw') is not None:
     df_f = df_f[
         (df_f["Rank"] >= f_rank[0]) & (df_f["Rank"] <= f_rank[1]) & 
         (df_f["An"] >= f_an[0]) & (df_f["An"] <= f_an[1]) & 
+        (df_f["Tang"] >= f_tang) & 
         (df_f["DâySạch"] >= f_day[0]) & (df_f["DâySạch"] <= f_day[1]) &
         (df_f["Cứng(10k)"] >= f_hard)
     ].copy()
     
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1: st.metric("SỐ QUÂN LỌC", f"{len(df_f)} quân")
-    with c2: st.code(", ".join(df_f.sort_values("Số")["Số"].tolist()) if not df_f.empty else "Trống")
-    with c3: st.download_button("💾 XUẤT JSON V13.4", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_4.json")
+    with c2: st.code(", ".join(df_f.sort_values("Số")["Số"].tolist()) if not df_f.empty else "Dàn trống")
+    with c3: st.download_button("💾 XUẤT JSON V13.8", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_8.json")
     
     st.divider()
     col_l, col_r = st.columns([1, 2.5])
     with col_l:
-        st.subheader("🎯 BẢNG LỌC CHIẾN THUẬT")
+        st.subheader("🎯 BẢNG LỌC TẦNG")
         st.dataframe(df_f, use_container_width=True, height=500, hide_index=True)
     with col_r:
-        st.subheader("📜 TRUY VẾT LỊCH SỬ (Rank - An - DâySạch)")
+        st.subheader("📜 TRUY VẾT GĐB (Rank-An-DaySach-Tang)")
         st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
