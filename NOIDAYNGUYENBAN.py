@@ -25,44 +25,59 @@ def calculate_tier(losses, threshold_pct):
     idx = int(len(losses_sorted) * (threshold_pct / 100)) - 1
     return losses_sorted[max(0, idx)]
 
-# --- 2. BỘ NÃO AI: THERMAL BALANCE ---
+# --- 2. BỘ NÃO AI: THERMAL BALANCE (CORE MỚI) ---
 def get_thermal_ai_set(df_raw):
     if df_raw is None or df_raw.empty: return []
+    
     def scoring(row):
         s = 0
+        # Vùng A: 2,3 (5đ), 4 (3đ), 0,1 (2đ)
         if row['An'] in [2, 3]: s += 5
         elif row['An'] == 4: s += 3
         elif row['An'] in [0, 1]: s += 2
-        if row['Tang'] == 1: s += 5
-        elif row['Tang'] > 1: s += 4
+        
+        # Vùng T: 1,2,3 (5đ), >3 (4đ) - Theo yêu cầu mới của mày
+        if row['Tang'] in [1, 2, 3]: s += 5
+        elif row['Tang'] > 3: s += 4
+        
+        # Vùng D: 30-119 (2đ), >=120 (1đ)
         if 30 <= row['DâySạch'] <= 119: s += 2
         elif row['DâySạch'] >= 120: s += 1
+        
+        # Vùng C: 9-29 (5đ), >=30 (4đ)
         if 9 <= row['Cứng(10k)'] <= 29: s += 5
         elif row['Cứng(10k)'] >= 30: s += 4
         return s
     
     df_copy = df_raw.copy()
     df_copy['AI_Score'] = df_copy.apply(scoring, axis=1)
+    
+    # Nhân Core 17 điểm (A:2,3 & T:1,2,3 & D:30-119 & C:9-29)
     core_df = df_copy[df_copy['AI_Score'] == 17].copy()
     rem_df = df_copy[df_copy['AI_Score'] < 17].sort_values(['AI_Score', 'Điểm'], ascending=[False, False]).copy()
     
     final_df = core_df.copy()
+    
+    # Nhặt quân dự bị và cân bằng nhiệt 20-28
     for _, row in rem_df.iterrows():
         if len(final_df) >= 59: break
         curr_avg = final_df['Cứng(10k)'].mean() if not final_df.empty else 24.0
-        if curr_avg > 26:
+        
+        if curr_avg > 25.5: # Ưu tiên làm nguội
             if row['Cứng(10k)'] < curr_avg: final_df = pd.concat([final_df, pd.DataFrame([row])])
-        elif curr_avg < 22:
+        elif curr_avg < 22.5: # Ưu tiên làm nóng
             if row['Cứng(10k)'] > curr_avg: final_df = pd.concat([final_df, pd.DataFrame([row])])
-        else:
+        else: # Nhiệt ổn định
             final_df = pd.concat([final_df, pd.DataFrame([row])])
             
+    # Ép dàn 50-59 và AvgC 20-28
     while len(final_df) > 59 or (len(final_df) > 50 and (final_df['Cứng(10k)'].mean() < 20 or final_df['Cứng(10k)'].mean() > 28)):
         final_df = final_df.sort_values(['AI_Score', 'Điểm'], ascending=[True, True]).iloc[1:]
+        
     return final_df
 
 # --- 3. XỬ LÝ MA TRẬN ---
-def process_matrix_v13_34():
+def process_matrix_v13_35():
     full_str = st.session_state.get('last_full_str', "0"*107)
     db = st.session_state.get('db', {})
     if not db: return None
@@ -91,9 +106,9 @@ def process_matrix_v13_34():
     st.session_state['df_raw'] = df
     return df
 
-# --- 4. GIAO DIỆN V13.21 ---
-st.set_page_config(layout="wide", page_title="Matrix V13.34 Legacy")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.34 - Full V13.21 Recovery</h1>", unsafe_allow_html=True)
+# --- 4. GIAO DIỆN PHỤC HỒI CHUẨN V13.21 ---
+st.set_page_config(layout="wide", page_title="Matrix V13.35 Core Refined")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.35 - Thermal Core 1,2,3</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -107,16 +122,16 @@ with st.sidebar:
         if st.button("💎 KHỞI TẠO"):
             st.session_state['db'] = {str(i): {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": [0]*10} for i in range(11449)}
             st.session_state['history'] = []; st.session_state['last_full_str'] = "0" * 107
-            process_matrix_v13_34(); st.rerun()
+            process_matrix_v13_35(); st.rerun()
 
     up_json = st.file_uploader("📥 Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json); st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', []); st.session_state['last_full_str'] = data.get('last_full_str', "0"*107)
-        process_matrix_v13_34(); st.rerun()
+        process_matrix_v13_35(); st.rerun()
 
     st.divider()
-    st.header("🧠 CHIẾN THUẬT")
+    st.header("🧠 CHIẾN THUẬT AI")
     ai_on = st.toggle("Kích hoạt AI Cân bằng nhiệt", value=True)
     
     if not ai_on:
@@ -137,41 +152,25 @@ with st.sidebar:
     st.session_state['gdb_val'] = st.text_input("GĐB (2 số):", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        df_now = process_matrix_v13_34()
+        df_now = process_matrix_v13_35()
         if df_now is not None:
             raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
             if len(raw_list) >= 27:
                 gdb_val = st.session_state['gdb_val']
-                
-                # Trích xuất profile GĐB ĐẦY ĐỦ
                 gdb_row = df_now[df_now['Số'] == gdb_val]
-                if not gdb_row.empty:
-                    r = gdb_row.iloc[0]
-                    gdb_display = f"{gdb_val} (R{int(r['Rank'])}-A{int(r['An'])}-D{int(r['DâySạch'])}-T{int(r['Tang'])}-C{int(r['Cứng(10k)'])}%)"
-                else:
-                    gdb_display = gdb_val
-
-                # Chốt dàn đối soát
+                gdb_display = f"{gdb_val} (R{int(gdb_row.iloc[0]['Rank'])}-A{int(gdb_row.iloc[0]['An'])}-D{int(gdb_row.iloc[0]['DâySạch'])}-T{int(gdb_row.iloc[0]['Tang'])}-C{int(gdb_row.iloc[0]['Cứng(10k)'])}%)" if not gdb_row.empty else gdb_val
                 df_final = get_thermal_ai_set(df_now) if ai_on else df_now[(df_now["Rank"] >= f_rank[0]) & (df_now["Rank"] <= f_rank[1]) & (df_now["An"] >= f_an[0]) & (df_now["An"] <= f_an[1]) & (df_now["Tang"] >= f_tang_min) & (df_now["Cứng(10k)"] >= f_hard[0]) & (df_now["Cứng(10k)"] <= f_hard[1])]
-                ai_list = df_final["Số"].tolist()
-                ai_status = f"A({len(ai_list)})" if gdb_val in ai_list else f"T({len(ai_list)})"
-                
-                st.session_state['history'].insert(0, {
-                    "STT": len(st.session_state['history'])+1, 
-                    "GĐB": gdb_display, 
-                    "Ai": ai_status, 
-                    "AvgC": round(df_final['Cứng(10k)'].mean(), 2)
-                })
-                st.session_state['last_full_str'] = "".join(raw_list[:27]); process_matrix_v13_34(); st.rerun()
+                st.session_state['history'].insert(0, {"STT": len(st.session_state['history'])+1, "GĐB": gdb_display, "Ai": f"A({len(df_final)})" if gdb_val in df_final["Số"].tolist() else f"T({len(df_final)})", "AvgC": round(df_final['Cứng(10k)'].mean(), 2)})
+                st.session_state['last_full_str'] = "".join(raw_list[:27]); process_matrix_v13_35(); st.rerun()
 
 # --- 5. HIỂN THỊ KẾT QUẢ ---
 if st.session_state.get('df_raw') is not None:
-    df_raw_data = st.session_state['df_raw']
-    df_display = get_thermal_ai_set(df_raw_data) if ai_on else df_raw_data[(df_raw_data["Rank"] >= f_rank[0]) & (df_raw_data["Rank"] <= f_rank[1]) & (df_raw_data["An"] >= f_an[0]) & (df_raw_data["An"] <= f_an[1]) & (df_raw_data["Tang"] >= f_tang_min) & (df_raw_data["Cứng(10k)"] >= f_hard[0]) & (df_raw_data["Cứng(10k)"] <= f_hard[1])]
+    df_f = st.session_state['df_raw']
+    df_display = get_thermal_ai_set(df_f) if ai_on else df_f[(df_f["Rank"] >= f_rank[0]) & (df_f["Rank"] <= f_rank[1]) & (df_f["An"] >= f_an[0]) & (df_f["An"] <= f_an[1]) & (df_f["Tang"] >= f_tang_min) & (df_f["Cứng(10k)"] >= f_hard[0]) & (df_f["Cứng(10k)"] <= f_hard[1])]
 
     col_m, col_d = st.columns([2, 1])
     with col_m: st.metric("DÀN CHỐT", f"{len(df_display)} quân", f"AvgC: {df_display['Cứng(10k)'].mean():.2f}")
-    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state.get('db'), "history": st.session_state['history'], "last_full_str": st.session_state.get('last_full_str')}), file_name="matrix_v13_34.json")
+    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_35.json")
     
     st.code(", ".join(df_display.sort_values("Số")["Số"].tolist()))
     
