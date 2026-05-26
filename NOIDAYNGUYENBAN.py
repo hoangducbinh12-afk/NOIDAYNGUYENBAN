@@ -61,7 +61,7 @@ def get_thermal_ai_set(df_raw):
     return final_df
 
 # --- 3. XỬ LÝ MA TRẬN ---
-def process_matrix_v13_37():
+def process_matrix_v13_38():
     full_str = st.session_state.get('last_full_str', "0"*107)
     db = st.session_state.get('db', {})
     if not db: return None
@@ -91,8 +91,8 @@ def process_matrix_v13_37():
     return df
 
 # --- 4. GIAO DIỆN PHỤC HỒI CHUẨN V13.21 ---
-st.set_page_config(layout="wide", page_title="Matrix V13.37 T-Series Recovery")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.37 - T5, T10, T15 Recovery</h1>", unsafe_allow_html=True)
+st.set_page_config(layout="wide", page_title="Matrix V13.38 Full Option")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.38 - Full Features Recovery</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -106,18 +106,27 @@ with st.sidebar:
         if st.button("💎 KHỞI TẠO"):
             st.session_state['db'] = {str(i): {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": [0]*10} for i in range(11449)}
             st.session_state['history'] = []; st.session_state['last_full_str'] = "0" * 107
-            process_matrix_v13_37(); st.rerun()
+            process_matrix_v13_38(); st.rerun()
 
     up_json = st.file_uploader("📥 Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json); st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', []); st.session_state['last_full_str'] = data.get('last_full_str', "0"*107)
-        process_matrix_v13_37(); st.rerun()
+        process_matrix_v13_38(); st.rerun()
 
     st.divider()
-    st.header("🧠 CHIẾN THUẬT AI")
+    st.header("🧠 CHIẾN THUẬT")
     ai_on = st.toggle("Kích hoạt AI Cân bằng nhiệt", value=True)
     
+    # --- PHỤC HỒI THANH TRƯỢT THỦ CÔNG ---
+    if not ai_on:
+        st.subheader("🕹️ ĐIỀU CHỈNH TAY")
+        f_rank = st.slider("Hạng (Rank):", 0, 100, (0, 99))
+        f_an = st.slider("An thông:", 0, 15, (0, 4))
+        f_tang_min = st.slider("Tầng tối thiểu:", 0, 10, 1)
+        f_hard = st.slider("Khoảng Cứng %:", 0.0, 100.0, (8.0, 55.0))
+        if st.button("✅ ÁP DỤNG BỘ LỌC"): process_matrix_v13_38(); st.rerun()
+
     st.header("📸 QUÉT KQ (OCR)")
     up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
     if up_img and st.button("🚀 OCR"):
@@ -129,7 +138,7 @@ with st.sidebar:
     st.session_state['gdb_val'] = st.text_input("GĐB (2 số):", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        df_now = process_matrix_v13_37()
+        df_now = process_matrix_v13_38()
         if df_now is not None:
             raw_input_str = st.session_state['raw_input'].replace(",", " ").replace("  ", " ")
             raw_list = [x.strip() for x in raw_input_str.split() if x]
@@ -138,14 +147,18 @@ with st.sidebar:
                 gdb_row = df_now[df_now['Số'] == gdb_val]
                 gdb_display = f"{gdb_val} (R{int(gdb_row.iloc[0]['Rank'])}-A{int(gdb_row.iloc[0]['An'])}-D{int(gdb_row.iloc[0]['DâySạch'])}-T{int(gdb_row.iloc[0]['Tang'])}-C{int(gdb_row.iloc[0]['Cứng(10k)'])}%)" if not gdb_row.empty else gdb_val
                 
-                df_final = get_thermal_ai_set(df_now) if ai_on else df_now.head(55)
+                # Chốt dàn đối soát
+                if ai_on:
+                    df_final = get_thermal_ai_set(df_now)
+                else:
+                    df_final = df_now[(df_now["Rank"] >= f_rank[0]) & (df_now["Rank"] <= f_rank[1]) & (df_now["An"] >= f_an[0]) & (df_now["An"] <= f_an[1]) & (df_now["Tang"] >= f_tang_min) & (df_now["Cứng(10k)"] >= f_hard[0]) & (df_now["Cứng(10k)"] <= f_hard[1])]
+                
                 ai_list = df_final["Số"].tolist()
                 
-                # --- TÍNH TOÁN THỐNG KÊ T5, T10, T15... ---
-                hist_data = st.session_state['history']
+                # Tính toán T5, T10...
                 def count_hits(n_days):
                     count = 0
-                    for h in hist_data[:n_days]:
+                    for h in st.session_state['history'][:n_days]:
                         if "A(" in h.get("Ai", ""): count += 1
                     return count
 
@@ -156,22 +169,23 @@ with st.sidebar:
                     "AvgC": round(df_final['Cứng(10k)'].mean(), 2),
                     "T5": count_hits(5), "T10": count_hits(10), "T15": count_hits(15), "T20": count_hits(20)
                 })
-                st.session_state['last_full_str'] = "".join(raw_list[:27]); process_matrix_v13_37(); st.rerun()
+                st.session_state['last_full_str'] = "".join(raw_list[:27]); process_matrix_v13_38(); st.rerun()
 
 # --- 5. HIỂN THỊ KẾT QUẢ ---
 if st.session_state.get('df_raw') is not None:
-    df_f = st.session_state['df_raw']
-    df_display = get_thermal_ai_set(df_f) if ai_on else df_f.head(55)
+    df_raw_data = st.session_state['df_raw']
+    if ai_on:
+        df_display = get_thermal_ai_set(df_raw_data)
+    else:
+        df_display = df_raw_data[(df_raw_data["Rank"] >= f_rank[0]) & (df_raw_data["Rank"] <= f_rank[1]) & (df_raw_data["An"] >= f_an[0]) & (df_raw_data["An"] <= f_an[1]) & (df_raw_data["Tang"] >= f_tang_min) & (df_raw_data["Cứng(10k)"] >= f_hard[0]) & (df_raw_data["Cứng(10k)"] <= f_hard[1])]
 
     col_m, col_d = st.columns([2, 1])
     with col_m: st.metric("DÀN CHỐT", f"{len(df_display)} quân", f"AvgC: {df_display['Cứng(10k)'].mean():.2f}")
-    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_37.json")
+    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_38.json")
     
     st.code(", ".join(df_display.sort_values("Số")["Số"].tolist()))
     
     st.divider()
     c1, c2 = st.columns([1, 2.8])
     with c1: st.subheader("🎯 CHI TIẾT"); st.dataframe(df_display, use_container_width=True, hide_index=True)
-    with c2: 
-        st.subheader("📜 LỊCH SỬ T5-T20"); 
-        st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
+    with c2: st.subheader("📜 LỊCH SỬ V13.21"); st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True, height=800)
