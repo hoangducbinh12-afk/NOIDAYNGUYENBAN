@@ -25,52 +25,52 @@ def calculate_tier(losses, threshold_pct):
     idx = int(len(losses_sorted) * (threshold_pct / 100)) - 1
     return losses_sorted[max(0, idx)]
 
-# --- 2. BỘ NÃO AI TỐI ƯU AN TOÀN (50-59 SỐ) ---
-def ai_safety_engine(history, df_raw):
-    # Thiết lập vùng an toàn theo yêu cầu của mày
-    f_purity = 70
+# --- 2. BỘ NÃO AI TỐI ƯU AN TOÀN 65% (DÀN 50-59) ---
+def ai_safety_65_engine(history, df_raw):
+    # Cấu hình "Pháo đài" theo yêu cầu mới
+    f_purity = 65
     f_an = (0, 4)
-    f_hard_min = 9.0
+    f_hard_min = 8.0
     
-    if len(history) < 3:
-        return (0, 99), 1, (0, 250), (f_hard_min, 50.0), "⚠️ Đang dùng cấu hình thô..."
+    if df_raw is None or df_raw.empty:
+        return (0, 99), 1, (0, 250), (8.0, 50.0), "⚠️ Chờ tính toán dữ liệu..."
 
-    # Lấy dữ liệu thô thỏa mãn An và Cứng trước
+    # Lọc sơ bộ theo An và Cứng trước
     temp_df = df_raw[
         (df_raw["An"] >= f_an[0]) & (df_raw["An"] <= f_an[1]) & 
         (df_raw["Cứng(10k)"] >= f_hard_min) & (df_raw["Tang"] >= 1)
     ]
     
-    # Tự động điều chỉnh Rank để dàn rơi vào khoảng 50-59 số
+    # AI tự động điều chỉnh Rank để ép dàn về 50-59 số
     f_r_max = 99
     for r in range(99, 30, -1):
         count = len(temp_df[temp_df["Rank"] <= r])
         if count <= 59:
             f_r_max = r
-            if count >= 50: break # Dừng khi đạt ngưỡng 50-59
+            if count >= 50: break
             
     f_r = (0, f_r_max)
-    # Lấy nhịp Dây (D) trung bình từ lịch sử để lọc nhiễu
-    d_h = []
-    for h in history:
-        m = re.search(r"D(\d+)", h.get('GĐB', ''))
-        if m: d_h.append(int(m.group(1)))
-    f_d = (int(np.percentile(d_h, 10)) if d_h else 0, 250)
+    
+    # Phỏng đoán dải Dây (D) từ lịch sử
+    d_h = [int(re.search(r"D(\d+)", h.get('GĐB', '')).group(1)) for h in history if re.search(r"D(\d+)", h.get('GĐB', ''))]
+    f_d = (int(np.percentile(d_h, 5)) if d_h else 0, 250)
 
-    msg = f"🛡️ AI Safety: Dàn {len(temp_df[temp_df['Rank'] <= f_r_max])} số (R0-{f_r_max}). Purity 70% | Cứng > 9%"
-    return f_r, 1, f_d, (f_hard_min, 50.0), msg
+    msg = f"🛡️ AI 65% Mode: Dàn {len(temp_df[temp_df['Rank'] <= f_r_max])} quân. Vùng an toàn R(0-{f_r_max}) đã được xác lập."
+    return f_r, 1, f_d, (f_hard_min, 55.0), msg
 
 # --- 3. XỬ LÝ MA TRẬN ---
-def process_matrix_v13_23():
+def process_matrix_v13_24():
     full_str = st.session_state.get('last_full_str', "0"*107)
     db = st.session_state.get('db', {})
     if not db: return None
-    current_map = get_mapping_v11(full_str)
-    # Cố định Độ tinh khiết 70% theo ý mày
-    st.session_state['f_strict_val'] = 70
-    threshold_pct = 70
     
+    # CHỐT ĐỘ TINH KHIẾT 65%
+    st.session_state['f_strict_val'] = 65
+    threshold_pct = 65
+    
+    current_map = get_mapping_v11(full_str)
     stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "max_gan": 0, "clean_wire_count": 0, "clean_window_hits": 0, "all_losses": []} for i in range(100)}
+    
     for wire_id, num in current_map.items():
         wire = db.get(str(wire_id), {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": [0]*10})
         s = stats[num]
@@ -98,9 +98,9 @@ def process_matrix_v13_23():
     st.session_state['df_raw'] = df
     return df
 
-# --- 4. GIAO DIỆN (PHỤC HỒI V13.21) ---
-st.set_page_config(layout="wide", page_title="Matrix V13.23 Safety AI")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.23 - Safety Fortress (50-59)</h1>", unsafe_allow_html=True)
+# --- 4. GIAO DIỆN ---
+st.set_page_config(layout="wide", page_title="Matrix V13.24 Safety 65%")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.24 - Safety Fortress 65% (50-59)</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -114,7 +114,7 @@ with st.sidebar:
         if st.button("💎 KHỞI TẠO"):
             st.session_state['db'] = {str(i): {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": [0]*10} for i in range(11449)}
             st.session_state['history'] = []; st.session_state['last_full_str'] = "0" * 107
-            process_matrix_v13_23(); st.rerun()
+            process_matrix_v13_24(); st.rerun()
 
     up_json = st.file_uploader("📥 Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
@@ -122,14 +122,14 @@ with st.sidebar:
         st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', [])
         st.session_state['last_full_str'] = data.get('last_full_str', "0"*107)
-        process_matrix_v13_23(); st.rerun()
+        process_matrix_v13_24(); st.rerun()
 
     st.divider()
-    st.header("🧠 CHẾ ĐỘ AI SAFETY")
-    ai_on = st.toggle("Kích hoạt AI Tối ưu 50-59", value=True)
+    st.header("🧠 SIÊU AI 65% (AUTO)")
+    ai_on = st.toggle("Kích hoạt AI Tối ưu an toàn", value=True)
     
     if ai_on and 'df_raw' in st.session_state:
-        f_rank, f_tang_min, f_day, f_hard, msg = ai_safety_engine(st.session_state['history'], st.session_state['df_raw'])
+        f_rank, f_tang_min, f_day, f_hard, msg = ai_safety_65_engine(st.session_state['history'], st.session_state['df_raw'])
         f_an = (0, 4)
         st.success(msg)
     else:
@@ -138,7 +138,7 @@ with st.sidebar:
         f_an = st.slider("An thông:", 0, 15, (0, 4))
         f_tang_min = st.slider("Tầng tối thiểu:", 0, 10, 1)
         f_day = st.slider("Dây Sạch (D):", 0, 250, (0, 250))
-        f_hard = st.slider("Khoảng Cứng %:", 0.0, 100.0, (9.0, 50.0))
+        f_hard = st.slider("Khoảng Cứng %:", 0.0, 100.0, (8.0, 50.0))
 
     st.divider()
     st.header("📸 QUÉT KQ (OCR)")
@@ -154,7 +154,7 @@ with st.sidebar:
     st.session_state['gdb_val'] = st.text_input("GĐB (2 số):", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        df_now = process_matrix_v13_23()
+        df_now = process_matrix_v13_24()
         if df_now is not None:
             raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
             if len(raw_list) >= 27:
@@ -169,21 +169,15 @@ with st.sidebar:
                 ai_set = df_ai["Số"].tolist()
                 ai_status = f"A({len(ai_set)})" if gdb_val in ai_set else f"T({len(ai_set)})"
                 
-                # Ghi lịch sử
                 total_c = sum([df_now[df_now['Số'] == n]['Cứng(10k)'].values[0] for n in loto_list if n in df_now['Số'].values])
                 gdb_info = gdb_val
                 if gdb_val in df_now['Số'].values:
                     r = df_now[df_now['Số'] == gdb_val].iloc[0]
                     gdb_info = f"{gdb_val} (R{int(r['Rank'])}-A{int(r['An'])}-D{int(r['DâySạch'])}-T{int(r['Tang'])}-C{int(r['Cứng(10k)'])}%)"
                 
-                entry = {"STT": len(st.session_state['history'])+1, "GĐB": gdb_info, "Ai": ai_status, "Nhiệt(AvgC)": round(total_c/27, 2)}
-                for t in [5, 10, 20, 30, 50, 100]:
-                    sub = df_now.head(t); found = [n for n in loto_list if n in sub['Số'].values]
-                    entry[f"T{t}"] = f"{len(found)}({','.join(set(found))})" if found else "0"
-                
-                st.session_state['history'].insert(0, entry)
+                st.session_state['history'].insert(0, {"STT": len(st.session_state['history'])+1, "GĐB": gdb_info, "Ai": ai_status, "Nhiệt(AvgC)": round(total_c/27, 2)})
                 st.session_state['last_full_str'] = "".join(raw_list[:27])
-                process_matrix_v13_23(); st.rerun()
+                process_matrix_v13_24(); st.rerun()
 
 # --- 5. HIỂN THỊ KẾT QUẢ ---
 if st.session_state.get('df_raw') is not None:
@@ -196,8 +190,8 @@ if st.session_state.get('df_raw') is not None:
     ].copy()
     
     col_m, col_d = st.columns([2, 1])
-    with col_m: st.metric("DÀN KẾT QUẢ AI", f"{len(df_final)} quân")
-    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_23.json")
+    with col_m: st.metric("DÀN 65% SIÊU AN TOÀN", f"{len(df_final)} quân")
+    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_24.json")
     
     st.code(", ".join(df_final.sort_values("Số")["Số"].tolist()) if not df_final.empty else "Dàn trống")
     
