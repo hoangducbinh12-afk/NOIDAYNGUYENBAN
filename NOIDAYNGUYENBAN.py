@@ -44,9 +44,10 @@ def update_matrix_state(db, results_27, mapping):
             hist.append(0)
             w_data["hit_history"] = hist[-10:]
 
-# --- 2. BỘ NÃO AI (PURE 65%) ---
-def thermal_ai_engine(df_raw):
-    if df_raw is None or df_raw.empty: return pd.DataFrame()
+# --- 2. BỘ NÃO AI (CHỐT & AN TOÀN) ---
+def thermal_ai_engines(df_raw):
+    if df_raw is None or df_raw.empty: return pd.DataFrame(), pd.DataFrame()
+    
     def scoring(row):
         s = 0
         if row['An'] in [2, 3]: s += 5
@@ -55,24 +56,29 @@ def thermal_ai_engine(df_raw):
         if 30 <= row['DâySạch'] <= 119: s += 2
         if 9 <= row['Cứng(10k)'] <= 29: s += 5
         return s
+    
     df_c = df_raw.copy()
     df_c['AI_Score'] = df_c.apply(scoring, axis=1)
+    
+    # DÀN CHỐT (50-59 số)
     core = df_c[df_c['AI_Score'] >= 15].copy()
-    rem = df_c[df_c['AI_Score'] < 15].sort_values(['AI_Score', 'Điểm'], ascending=[False, False]).copy()
-    final = core.copy()
-    for _, r in rem.iterrows():
-        if len(final) >= 59: break
-        c_avg = final['Cứng(10k)'].mean() if not final.empty else 24.0
-        if c_avg > 26: 
-            if r['Cứng(10k)'] < c_avg: final = pd.concat([final, pd.DataFrame([r])])
-        elif c_avg < 22:
-            if r['Cứng(10k)'] > c_avg: final = pd.concat([final, pd.DataFrame([r])])
-        else:
-            final = pd.concat([final, pd.DataFrame([r])])
-    return final
+    rem_chot = df_c[df_c['AI_Score'] < 15].sort_values(['AI_Score', 'Điểm'], ascending=[False, False])
+    df_chot = core.copy()
+    for _, r in rem_chot.iterrows():
+        if len(df_chot) >= 55: break
+        df_chot = pd.concat([df_chot, pd.DataFrame([r])])
+    
+    # DÀN AN TOÀN (70-79 số) - Vét thêm Rank và nhịp
+    rem_safety = df_c[~df_c['Số'].isin(df_chot['Số'])].sort_values(['Rank', 'Điểm'], ascending=[True, False])
+    df_safety = df_chot.copy()
+    for _, r in rem_safety.iterrows():
+        if len(df_safety) >= 75: break
+        df_safety = pd.concat([df_safety, pd.DataFrame([r])])
+        
+    return df_chot, df_safety
 
 # --- 3. XỬ LÝ MA TRẬN ---
-def process_matrix_v13_62():
+def process_matrix_v13_63():
     db = st.session_state.get('db', {})
     f_str = st.session_state.get('last_full_str', "")
     mapping = get_mapping_v11(f_str)
@@ -100,8 +106,8 @@ def process_matrix_v13_62():
     return df
 
 # --- 4. GIAO DIỆN ---
-st.set_page_config(layout="wide", page_title="Matrix V13.62 Stable")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.62 - Minimal Stable</h1>", unsafe_allow_html=True)
+st.set_page_config(layout="wide", page_title="Matrix V13.63 Safety Edition")
+st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.63 - Safety & UI Optimized</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -114,75 +120,80 @@ with st.sidebar:
     with col2:
         if st.button("💎 KHỞI TẠO"):
             st.session_state['db'] = {str(i): {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": [0]*10} for i in range(11449)}
-            st.session_state['last_full_str'] = ""; process_matrix_v13_62(); st.rerun()
+            st.session_state['last_full_str'] = ""; process_matrix_v13_63(); st.rerun()
 
     up_json = st.file_uploader("📥 Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
         st.session_state['db'] = data.get('matrix', data)
         st.session_state['history'] = data.get('history', [])
-        st.session_state['last_full_str'] = data.get('last_full_str', ""); process_matrix_v13_62(); st.rerun()
+        st.session_state['last_full_str'] = data.get('last_full_str', ""); process_matrix_v13_63(); st.rerun()
 
     st.divider()
     ai_on = st.toggle("AI Cân bằng nhiệt", value=True)
     if not ai_on:
         f_rank = st.slider("Rank:", 0, 100, (11, 85))
         f_an = st.slider("An:", 0, 15, (0, 3)); f_tang_min = st.slider("Tầng:", 0, 10, 1); f_hard = st.slider("Cứng%:", 0.0, 100.0, (13.0, 45.0))
-        if st.button("✅ ÁP DỤNG BỘ LỌC TAY"): process_matrix_v13_62(); st.rerun()
+        if st.button("✅ ÁP DỤNG BỘ LỌC TAY"): process_matrix_v13_63(); st.rerun()
 
     st.header("📸 QUÉT KQ (OCR)")
     up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
     if up_img and st.button("🚀 CHẠY OCR"):
         reader = load_ocr(); results = reader.readtext(np.array(Image.open(up_img)), detail=0)
         nums = [n for n in results if n.isdigit() and 2 <= len(n) <= 5]
-        if nums: 
-            st.session_state['raw_input'] = ", ".join(nums)
-            st.session_state['gdb_val'] = nums[0][-2:]
-            st.rerun()
+        if nums: st.session_state['raw_input'] = ", ".join(nums); st.session_state['gdb_val'] = nums[0][-2:]; st.rerun()
 
     st.session_state['raw_input'] = st.text_area("27 giải loto:", value=st.session_state.get('raw_input', ""), height=80)
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        df_before = process_matrix_v13_62()
-        df_ai_current = thermal_ai_engine(df_before) if ai_on else df_before.head(55)
-        ai_list = df_ai_current["Số"].tolist()
+        df_before = process_matrix_v13_63()
+        d_chot, d_safe = thermal_ai_engines(df_before)
+        ai_l, safe_l = d_chot["Số"].tolist(), d_safe["Số"].tolist()
+        
         raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
         if len(raw_list) >= 27:
             gv = st.session_state['gdb_val']
             r_row = df_before[df_before['Số'] == gv].iloc[0] if gv in df_before['Số'].values else None
             g_p = f"{gv} (R{int(r_row['Rank'])}-A{int(r_row['An'])}-D{int(r_row['DâySạch'])}-T{int(r_row['Tang'])}-C{int(r_row['Cứng(10k)'])}%)" if r_row is not None else gv
             
-            # Ghi lịch sử tối giản (STT, GĐB, Ai, AvgC)
             entry = {
-                "STT": len(st.session_state['history'])+1, 
-                "GĐB": g_p, 
-                "Ai": f"A({len(ai_list)})" if gv in ai_list else f"T({len(ai_list)})", 
-                "AvgC": round(df_ai_current['Cứng(10k)'].mean(), 2) if not df_ai_current.empty else 0
+                "STT": len(st.session_state['history'])+1, "GĐB": g_p, 
+                "Ai": f"A({len(ai_l)})" if gv in ai_l else f"T({len(ai_l)})",
+                "AnToàn": f"A({len(safe_l)})" if gv in safe_l else f"T({len(safe_l)})",
+                "AvgC": round(d_chot['Cứng(10k)'].mean(), 2) if not d_chot.empty else 0
             }
             st.session_state['history'].insert(0, entry)
-            
             loto_27 = [n[-2:] for n in raw_list[:27]]; mapping_old = get_mapping_v11(st.session_state.get('last_full_str', ""))
             update_matrix_state(st.session_state['db'], loto_27, mapping_old); st.session_state['last_full_str'] = "".join(raw_list[:27])
-            process_matrix_v13_62(); st.rerun()
+            process_matrix_v13_63(); st.rerun()
 
 # --- 5. HIỂN THỊ ---
 if st.session_state.get('df_raw') is not None:
     df_raw_cur = st.session_state['df_raw']
-    df_d = thermal_ai_engine(df_raw_cur) if ai_on else df_raw_cur.head(55)
-    col_m, col_d = st.columns([2, 1])
-    with col_m: st.metric("DÀN CHỐT TIẾP THEO", f"{len(df_d)} quân", f"AvgC: {df_d['Cứng(10k)'].mean():.2f}")
-    with col_d: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_62.json")
-    st.code(", ".join(df_d.sort_values("Số")["Số"].tolist()))
+    d_chot, d_safe = thermal_ai_engines(df_raw_cur)
+    
+    # Metrics
+    c1, c2, c3 = st.columns(3)
+    with c1: st.metric("DÀN CHỐT", f"{len(d_chot)} quân", f"AvgC: {d_chot['Cứng(10k)'].mean():.2f}")
+    with c2: st.metric("DÀN AN TOÀN", f"{len(d_safe)} quân", f"High Coverage")
+    with c3: st.download_button("💾 LƯU .JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_63.json")
+    
+    st.write("**Dàn Chốt:**")
+    st.code(", ".join(d_chot.sort_values("Số")["Số"].tolist()))
+    st.write("**Dàn An Toàn:**")
+    st.code(", ".join(d_safe.sort_values("Số")["Số"].tolist()))
+    
     st.divider()
-    c1, c2 = st.columns([1, 2.8])
-    with c1: st.subheader("🎯 CHI TIẾT"); st.dataframe(df_d, use_container_width=True, hide_index=True)
-    with c2: 
-        st.subheader("📜 LỊCH SỬ"); 
+    # TỶ LỆ GIAO DIỆN MỚI: 1.5 cho Chi tiết (phóng to), 2.3 cho Lịch sử (thu nhỏ hơn chút so với cũ)
+    c_detail, c_hist = st.columns([1.5, 2.3])
+    with c_detail: 
+        st.subheader("🎯 CHI TIẾT DÀN CHỐT")
+        st.dataframe(d_chot, use_container_width=True, hide_index=True, height=750)
+    with c_hist: 
+        st.subheader("📜 LỊCH SỬ ĐỐI SOÁT")
         h_df = pd.DataFrame(st.session_state['history'])
         if not h_df.empty:
-            # CHỈ GIỮ LẠI CÁC CỘT CỐ ĐỊNH, LOẠI BỎ T5, T10...
-            fixed_cols = ["STT", "GĐB", "Ai", "AvgC"]
-            actual_cols = [c for c in fixed_cols if c in h_df.columns]
-            h_df = h_df[actual_cols]
-        st.dataframe(h_df, use_container_width=True, height=800)
+            cols = ["STT", "GĐB", "Ai", "AnToàn", "AvgC"]
+            h_df = h_df[[c for c in cols if c in h_df.columns]]
+        st.dataframe(h_df, use_container_width=True, height=750)
