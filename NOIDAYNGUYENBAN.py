@@ -6,7 +6,7 @@ import easyocr
 import re
 from PIL import Image
 
-# --- 1. SETTINGS & OCR ---
+# --- 1. CÀI ĐẶT HỆ THỐNG & OCR ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'])
@@ -57,64 +57,69 @@ def get_wire_lineage_v2(db, history, mapping, n_top_bet):
         return {f"{int(mapping.get(w_id)):02d}" for w_id, score in top_wires if mapping.get(w_id)}
     except: return set()
 
-# --- 2. BỘ NÃO PHỄU LỌC PHÂN TẦNG ƯU TIÊN ---
+# --- 2. BỘ NÃO HẠ DÀN (LOGIC: 79 BAO 59, 59 BAO 39) ---
 def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     if df_raw is None or df_raw.empty: 
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], [], pd.DataFrame()
     
-    # 2.1 Xác định vùng Đáy/Bệt 40
+    # A. Thiết lập vùng Đáy/Bệt 40
     set_bottom = set()
     if cfg['bot'] > 0:
         bottom_wires = sorted(db.items(), key=lambda x: x[1]['score'])[:cfg['bot']]
         set_bottom = {f"{int(mapping.get(str(w_id))):02d}" for w_id, d in bottom_wires if mapping.get(str(w_id))}
     set_bet = get_wire_lineage_v2(db, history, mapping, cfg['bet'])
-    set_overlap = set_bottom.intersection(set_bet)
     
-    # 2.2 Đánh dấu các lớp Kỹ Thuật
-    # Lõi 39 gắt: T=1,2 & A=2,3
+    # B. Thiết lập chuẩn kỹ thuật
     df_raw['core_39'] = ((df_raw['Tang'].isin([1, 2])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
-    # Lõi 59 nới: T=1,2,3 & A=2,3
     df_raw['core_59'] = ((df_raw['Tang'].isin([1, 2, 3])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
-    
-    # 2.3 Đánh dấu vùng Outside & Overlap
     df_raw['is_outside'] = (~df_raw['Số'].isin(set_bottom) & ~df_raw['Số'].isin(set_bet)).astype(int)
-    df_raw['is_overlap'] = (df_raw['Số'].isin(set_overlap)).astype(int)
-
-    # 2.4 Tính điểm ưu tiên (Priority Score)
-    # Dàn 39: Lõi (10đ) + Outside (5đ)
-    df_raw['p_39'] = (df_raw['core_39'] * 10) + (df_raw['is_outside'] * 5)
-    # Dàn 59: Lõi (10đ) + (Nếu không trùng Đáy-Bệt thì thêm 5đ)
-    df_raw['p_59'] = (df_raw['core_59'] * 10) + ((1 - df_raw['is_overlap']) * 5)
-
-    # 2.5 Thực hiện Cắt Dàn
-    dk_39 = df_raw.sort_values(by=['p_39', 'Điểm'], ascending=[False, False]).head(39)
-    da_59 = df_raw.sort_values(by=['p_59', 'Điểm'], ascending=[False, False]).head(59)
-    df_safe_79 = df_raw.sort_values(['Điểm', 'Rank'], ascending=[False, True]).head(79)
     
-    return dk_39, da_59, df_safe_79, sorted(list(set_bottom)), sorted(list(set_bet)), df_raw
+    # C. Tính điểm ưu tiên hạ dàn
+    # Trọng số dàn 39: Lõi gắt + Outside
+    df_raw['p_39'] = (df_raw['core_39'] * 10) + (df_raw['is_outside'] * 5)
+    # Trọng số dàn 59: Lõi nới + Outside
+    df_raw['p_59'] = (df_raw['core_59'] * 10) + (df_raw['is_outside'] * 5)
 
-# --- 3. UI ---
-st.set_page_config(layout="wide", page_title="Matrix Ultimate Inverse")
-st.title("🛡️ Matrix V13.75 - Ultimate Inverse Logic")
+    # D. QUY TRÌNH HẠ DÀN BAO PHỦ (NESTING)
+    
+    # BƯỚC 1: Đúc dàn 39 (Hạt nhân)
+    dk_39 = df_raw.sort_values(by=['p_39', 'Điểm'], ascending=[False, False]).head(39)
+    set_39 = set(dk_39['Số'].tolist())
+    df_raw['in_39'] = df_raw['Số'].isin(set_39).astype(int)
+
+    # BƯỚC 2: Đúc dàn 59 (Phải chứa 39)
+    # Ưu tiên những con đã nằm trong 39, sau đó mới xét p_59 và Điểm
+    da_59 = df_raw.sort_values(by=['in_39', 'p_59', 'Điểm'], ascending=[False, False, False]).head(59)
+    set_59 = set(da_59['Số'].tolist())
+    df_raw['in_59'] = df_raw['Số'].isin(set_59).astype(int)
+
+    # BƯỚC 3: Đúc dàn 79 (Phải chứa 59)
+    # Ưu tiên những con đã nằm trong 59, sau đó mới bù bằng Điểm số ma trận
+    ds_79 = df_raw.sort_values(by=['in_59', 'Điểm'], ascending=[False, False]).head(79)
+    
+    return dk_39, da_59, ds_79, sorted(list(set_bottom)), sorted(list(set_bet)), df_raw
+
+# --- 3. UI VÀ DISPLAY ---
+st.set_page_config(layout="wide", page_title="Matrix Nested Trinity")
+st.title("🛡️ Matrix V13.75 - Nested Trinity Logic")
 
 if 'cfg' not in st.session_state:
     st.session_state['cfg'] = {"tier": 68, "win": 10, "hard": 7.99, "bot": 40, "bet": 40}
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
 if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = ""
-if 'prev_sets' not in st.session_state: st.session_state['prev_sets'] = {}
 
 with st.sidebar:
     if st.button("🚨 RESET ALL", use_container_width=True): st.session_state.clear(); st.rerun()
     st.header("📂 1. DỮ LIỆU")
-    up_json = st.file_uploader("Nạp file JSON", type=['json'])
+    up_json = st.file_uploader("Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
-        st.session_state['db'], st.session_state['history'], st.session_state['last_full_str'] = data.get('matrix', data), data.get('history', []), data.get('last_full_str', "")
-        st.rerun()
+        st.session_state['db'], st.session_state['history'] = data.get('matrix', data), data.get('history', [])
+        st.session_state['last_full_str'] = data.get('last_full_str', ""); st.rerun()
 
     st.header("📸 2. QUÉT KQ")
-    up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'png', 'jpeg'])
+    up_img = st.file_uploader("Ảnh KQ", type=['jpg', 'png', 'jpeg'])
     if up_img and st.button("🚀 CHẠY OCR"):
         reader = load_ocr()
         res_ocr = reader.readtext(np.array(Image.open(up_img)), detail=0)
@@ -128,26 +133,27 @@ with st.sidebar:
         if len(raw_list) >= 27 and gdb_val:
             mapping = get_mapping_v11(st.session_state['last_full_str'])
             gdb_num = f"{int(re.sub(r'\D', '', gdb_val)[-2:]):02d}"
+            # Check ăn trượt
             p = st.session_state.get('prev_sets', {})
             check = lambda d: "A" if gdb_num in (d or []) else "T"
             st.session_state['history'].insert(0, {
-                "STT": len(st.session_state['history']) + 1, "GĐB": gdb_val, 
-                "Dan39": check(p.get('d39')), "Dan59": check(p.get('d59')), 
-                "Dan79": check(p.get('d79')), "180thap": check(p.get('dthap')), "180cao": check(p.get('dcao'))
+                "STT": len(st.session_state['history']) + 1, "GĐB": gdb_val,
+                "Dan39": check(p.get('d39')), "Dan59": check(p.get('d59')), "Dan79": check(p.get('d79')),
+                "180thap": check(p.get('dthap')), "180cao": check(p.get('dcao'))
             })
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
             st.session_state['last_full_str'] = "".join(raw_list[:27]); st.rerun()
 
     st.header("📝 3. INPUT")
     st.session_state['raw_input'] = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
-    st.session_state['gdb_val'] = st.text_input("GĐB (Full Metrics):", value=st.session_state.get('gdb_val', ""))
+    st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
 
-    st.header("⚙️ 4. BỘ LỌC FIXED")
-    st.session_state['cfg']['tier'] = st.slider("Mật độ Tầng (%):", 50, 80, st.session_state['cfg']['tier'])
-    st.session_state['cfg']['win'] = st.slider("Window soi (Kỳ):", 5, 20, st.session_state['cfg']['win'])
-    st.session_state['cfg']['hard'] = st.slider("Ngưỡng Cứng (C%):", 0.0, 15.0, st.session_state['cfg']['hard'])
-    st.session_state['cfg']['bot'] = st.slider("Dây ĐÁY (Thấp):", 0, 350, st.session_state['cfg']['bot'])
-    st.session_state['cfg']['bet'] = st.slider("Dây BỆT (Cao):", 0, 350, st.session_state['cfg']['bet'])
+    st.header("⚙️ 4. BỘ LỌC")
+    st.session_state['cfg']['tier'] = st.slider("Tầng (%):", 50, 80, 68)
+    st.session_state['cfg']['win'] = st.slider("Kỳ:", 5, 20, 10)
+    st.session_state['cfg']['hard'] = st.slider("Cứng (C%):", 0.0, 15.0, 7.99)
+    st.session_state['cfg']['bot'] = st.slider("Đáy:", 0, 350, 40)
+    st.session_state['cfg']['bet'] = st.slider("Bệt:", 0, 350, 40)
 
 # --- 4. DISPLAY ---
 if st.session_state['last_full_str']:
@@ -172,19 +178,21 @@ if st.session_state['last_full_str']:
 
     df_raw_val = get_matrix_df(st.session_state['cfg']['tier'], st.session_state['cfg']['win'])
     dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], get_mapping_v11(st.session_state['last_full_str']), st.session_state['cfg'])
-    st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao, 'd79': ds["Số"].tolist()}
+    
+    st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
 
+    # Hiển thị 5 dàn
     c1, c2, c3 = st.columns(3)
-    c1.success(f"🎯 Dàn Kết 39 ({len(dk)})\nLõi T1,2 + Max Outside"); c1.code(", ".join(dk["Số"].tolist()))
-    c2.info(f"🤖 Dàn AI 59 ({len(da)})\nLõi T1,2,3 + Anti-Overlap"); c2.code(", ".join(da["Số"].tolist()))
-    c3.warning(f"🛡️ Dàn Safe 79 ({len(ds)})\nLõi Ma Trận Gốc"); c3.code(", ".join(ds["Số"].tolist()))
+    c1.success(f"🎯 Kết 39 ({len(dk)})\nLõi T1,2 A2,3 Outside"); c1.code(", ".join(dk["Số"].tolist()))
+    c2.info(f"🤖 AI 59 ({len(da)})\nCủa 39 + Lõi nới"); c2.code(", ".join(da["Số"].tolist()))
+    c3.warning(f"🛡️ Safe 79 ({len(ds)})\nCủa 59 + Điểm Ma Trận"); c3.code(", ".join(ds["Số"].tolist()))
     
     c4, c5 = st.columns(2)
-    c4.error(f"📉 Đáy {st.session_state['cfg']['bot']} ({len(d_thap)} số)"); c4.code(", ".join(d_thap))
-    c5.error(f"📈 Bệt {st.session_state['cfg']['bet']} ({len(d_cao)} số)"); c5.code(", ".join(d_cao))
+    c4.error(f"📉 Đáy {st.session_state['cfg']['bot']} ({len(d_thap)})"); c4.code(", ".join(d_thap))
+    c5.error(f"📈 Bệt {st.session_state['cfg']['bet']} ({len(d_cao)})"); c5.code(", ".join(d_cao))
 
     st.divider()
-    t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT PHÂN TÍCH"])
+    t1, t2 = st.tabs(["📜 LỊCH SỬ", "📊 CHI TIẾT BAO PHỦ"])
     with t1:
         if st.session_state['history']:
             df_hist = pd.DataFrame(st.session_state['history'])
@@ -193,7 +201,6 @@ if st.session_state['last_full_str']:
                 if c not in df_hist.columns: df_hist[c] = "T"
             st.dataframe(df_hist[cols], use_container_width=True, hide_index=True)
     with t2:
-        # Bảng này sẽ hiển thị các chỉ số ưu tiên p_39 và p_59 cho mày soi
-        st.dataframe(df_full.sort_values(by=['p_59', 'p_39', 'Điểm'], ascending=[False, False, False]), use_container_width=True, hide_index=True)
+        st.dataframe(df_full.sort_values(by=['in_39', 'in_59', 'Điểm'], ascending=[False, False, False]), use_container_width=True, hide_index=True)
 
-    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_ultimate.json", use_container_width=True)
+    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_nested.json", use_container_width=True)
