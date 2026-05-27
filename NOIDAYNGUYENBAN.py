@@ -42,111 +42,71 @@ def update_matrix_state(db, results_27, mapping):
             hist = w_data.get("hit_history", [0]*10)
             hist.append(0); w_data["hit_history"] = hist[-10:]
 
-# --- 2. BỘ NÃO TRUY VẾT LỊCH SỬ (MAPPING ENGINE) ---
+# --- 2. CÁC CÔNG CỤ TRUY VẾT (V13.75) ---
+
+def get_bottom_tracer(db, mapping, n_bottom=180):
+    """Lớp 1: Truy vết N dây điểm thấp nhất (Điểm nén)"""
+    bottom_wires = sorted(db.items(), key=lambda x: x[1]['score'])[:n_bottom]
+    bottom_numbers = set()
+    for wire_id, data in bottom_wires:
+        num = mapping.get(str(wire_id))
+        if num: bottom_numbers.add(num)
+    return list(bottom_numbers)
+
 def get_historical_mapping(history):
-    """Phân tích ánh xạ: Kỳ trước gọi tên kỳ sau"""
-    mapping_dict = {}
-    if len(history) < 2: return mapping_dict
-    
-    # Duyệt lịch sử để tìm cặp (prev_gdb, curr_gdb)
+    """Lớp 2: Truy vết ánh xạ lịch sử (Mapping)"""
+    m_dict = {}
+    if len(history) < 2: return m_dict
     for i in range(len(history) - 1):
         try:
-            prev_gdb = history[i+1]['GĐB'].split()[0]
-            curr_gdb = history[i]['GĐB'].split()[0]
-            if prev_gdb not in mapping_dict:
-                mapping_dict[prev_gdb] = {}
-            mapping_dict[prev_gdb][curr_gdb] = mapping_dict[prev_gdb].get(curr_gdb, 0) + 1
+            prev = history[i+1]['GĐB'].split()[0]
+            curr = history[i]['GĐB'].split()[0]
+            if prev not in m_dict: m_dict[prev] = {}
+            m_dict[prev][curr] = m_dict[prev].get(curr, 0) + 1
         except: continue
-    return mapping_dict
+    return m_dict
 
-# --- 3. BỘ NÃO AI V13.73 (TÍCH HỢP TRACING) ---
-def thermal_ai_engines_v73(df_raw, history, ai_enabled=True, manual_filters=None):
+# --- 3. BỘ NÃO HỘI TỤ TRINITY V13.75 ---
+
+def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom=180):
     if df_raw is None or df_raw.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
     df_c = df_raw.copy()
-    df_c['Map_Score'] = 0 # Khởi tạo điểm ánh xạ lịch sử
-
-    if ai_enabled:
-        # A. CHẤM ĐIỂM KỸ THUẬT (AI SCORE)
-        def scoring(row):
-            s = 0
-            if row['An'] in [2, 3]: s += 5
-            elif row['An'] == 4: s += 3
-            if row['Tang'] in [2, 3]: s += 6
-            elif row['Tang'] == 1: s += 4
-            if 30 <= row['DâySạch'] <= 119: s += 2
-            # Nới nhiệt Top Rank
-            if row['Rank'] <= 15:
-                if 9 <= row['Cứng(10k)'] <= 42: s += 5
-            else:
-                if 9 <= row['Cứng(10k)'] <= 29: s += 5
-            return s
-        
-        df_c['AI_Score'] = df_c.apply(scoring, axis=1)
-
-        # B. TÍNH ĐIỂM ÁNH XẠ LỊCH SỬ
-        mapping_dict = get_historical_mapping(history)
-        if history and history[0]['GĐB']:
-            last_gdb = history[0]['GĐB'].split()[0]
-            if last_gdb in mapping_dict:
-                # Những số hay nổ sau last_gdb sẽ được cộng điểm Map_Score
-                for num_pred, freq in mapping_dict[last_gdb].items():
-                    df_c.loc[df_c['Số'] == num_pred, 'Map_Score'] = freq * 3 # Trọng số lịch sử
-
-        # C. PHÂN TẦNG QUÂN SỐ CỨNG (59-39-79-21)
-        # 1. Dàn Safe (79 số): Giữ nền tảng Rank & Kỹ thuật
-        df_safe = pd.concat([df_c[df_c['AI_Score'] >= 15], df_c.sort_values('Rank').head(79)]).drop_duplicates().head(79)
-        
-        # 2. Dàn Ai (59 số): Ưu tiên những con có Map_Score trong dàn Safe
-        # Sắp xếp theo: Có ánh xạ lịch sử -> AI Score cao -> Rank cao
-        df_ai = df_safe.sort_values(['Map_Score', 'AI_Score', 'Rank'], ascending=[False, False, True]).head(59)
-        
-        # 3. Dàn Kết (39 số): Lọc tinh nhất từ dàn Ai (Hội tụ cả 2 điểm cao)
-        # Cộng tổng để tìm điểm hội tụ
-        df_ai['Convergence'] = df_ai['AI_Score'] + df_ai['Map_Score']
-        df_ket = df_ai.sort_values(['Convergence', 'Rank'], ascending=[False, True]).head(39)
-        
-        # 4. Dàn Loại (21 số)
-        df_loai = df_c[~df_c['Số'].isin(df_safe['Số'])].sort_values('Rank', ascending=False).head(21)
     
-    else:
-        # Logic lọc tay (giữ từ V13.72)
-        f = manual_filters
-        df_f = df_c[(df_c['Rank'].between(f['rank'][0], f['rank'][1])) & (df_c['An'].between(f['an'][0], f['an'][1])) & (df_c['Tang'] >= f['tang_min']) & (df_c['Cứng(10k)'].between(f['hard'][0], f['hard'][1]))].copy()
-        df_ai = df_f.head(59); df_ket = df_ai.head(39); df_safe = df_ai.head(79); df_loai = df_c[~df_c['Số'].isin(df_safe['Số'])].head(21)
+    # A. Lấy 3 nguồn dữ liệu
+    bottom_list = get_bottom_tracer(db, mapping, n_bottom)
+    mapping_dict = get_historical_mapping(history)
+    last_gdb = history[0]['GĐB'].split()[0] if history else ""
+    history_preds = list(mapping_dict.get(last_gdb, {}).keys())
+    # Lấy dàn 79 kỹ thuật (Rank + Nhịp)
+    df_tech_79 = df_c.sort_values(['Điểm', 'Rank'], ascending=[False, True]).head(79)
+    tech_list = df_tech_79['Số'].tolist()
 
-    return df_ket, df_ai, df_safe.reset_index(drop=True), df_loai
+    # B. Chấm điểm Hội tụ (Trinity Match)
+    def check_trinity(num):
+        match_count = 0
+        tags = []
+        if num in tech_list: match_count += 1; tags.append("Tech")
+        if num in bottom_list: match_count += 1; tags.append("Bottom")
+        if num in history_preds: match_count += 1; tags.append("Hist")
+        return match_count, "|".join(tags)
 
-# --- 4. XỬ LÝ MA TRẬN & STREAMLIT ---
-def process_matrix_v13_73():
-    db = st.session_state.get('db', {})
-    f_str = st.session_state.get('last_full_str', "")
-    mapping = get_mapping_v11(f_str)
-    stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "clean_wire_count": 0, "clean_window_hits": 0, "all_losses": []} for i in range(100)}
-    for wire_id, w_data in db.items():
-        num = mapping.get(str(wire_id))
-        if num:
-            s = stats[num]
-            sw, sl = int(w_data.get("streak_win", 0)), int(w_data.get("streak_loss", 0))
-            s["all_losses"].append(sl if sw == 0 else 0)
-            if sw > s["max_an"]: s["max_an"] = sw
-            s["clean_window_hits"] += sum(w_data.get("hit_history", [])[-WINDOW:])
-            if sw == 0:
-                s["clean_wire_count"] += 1
-                s["total_score"] += float(w_data.get("score", 1000.0))
-    res = []
-    for num, s in stats.items():
-        dc = s["clean_wire_count"] if s["clean_wire_count"] > 0 else 1
-        hard = round((s["clean_window_hits"] / (WINDOW * AVG_WIRES)) * 100, 2)
-        score = round((s["total_score"] / dc) * (1 + hard/100), 2)
-        res.append({"Số": num, "Điểm": score, "An": s["max_an"], "Tang": calculate_tier(s["all_losses"], 65), "DâySạch": s["clean_wire_count"], "Cứng(10k)": hard})
-    df = pd.DataFrame(res).sort_values("Điểm", ascending=False).reset_index(drop=True)
-    df["Rank"] = df.index + 1
-    st.session_state['df_raw'] = df
-    return df
+    df_c[['Match', 'Tags']] = df_c['Số'].apply(lambda x: pd.Series(check_trinity(x)))
 
-st.set_page_config(layout="wide", page_title="Matrix V13.73 Tracing")
-st.markdown("<h1 style='text-align: center; color: red;'>Matrix V13.73 - Tracing & Mapping AI</h1>", unsafe_allow_html=True)
+    # C. Phân tầng ưu tiên để lọc dàn 59
+    # Ưu tiên: Match (3->2->1) rồi đến Điểm rồi đến Rank
+    df_sorted = df_c.sort_values(['Match', 'Điểm', 'Rank'], ascending=[False, False, True])
+
+    df_ai = df_sorted.head(59)
+    df_ket = df_ai.head(39)
+    df_safe = df_sorted.head(79)
+    df_loai = df_c[~df_c['Số'].isin(df_safe['Số'])].sort_values('Rank', ascending=False).head(21)
+    
+    return df_ket, df_ai, df_safe, df_loai, bottom_list
+
+# --- 4. GIAO DIỆN STREAMLIT ---
+st.set_page_config(layout="wide", page_title="Matrix V13.75 Trinity")
+st.markdown("<h1 style='text-align: center; color: #FF4B4B;'>Matrix V13.75 - Trinity Convergence</h1>", unsafe_allow_html=True)
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -159,19 +119,15 @@ with st.sidebar:
     with col2:
         if st.button("💎 KHỞI TẠO"):
             st.session_state['db'] = {str(i): {"score": 1000.0, "streak_win": 0, "streak_loss": 0, "hit_history": [0]*10} for i in range(11449)}
-            st.session_state['last_full_str'] = ""; process_matrix_v13_73(); st.rerun()
+            st.session_state['last_full_str'] = ""; st.rerun()
     
     up_json = st.file_uploader("📥 Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
-        data = json.load(up_json); st.session_state['db'] = data.get('matrix', data); st.session_state['history'] = data.get('history', []); st.session_state['last_full_str'] = data.get('last_full_str', ""); process_matrix_v13_73(); st.rerun()
+        data = json.load(up_json); st.session_state['db'] = data.get('matrix', data); st.session_state['history'] = data.get('history', []); st.session_state['last_full_str'] = data.get('last_full_str', ""); st.rerun()
     
-    st.divider(); st.header("🧠 CHIẾN THUẬT")
-    ai_on = st.toggle("AI Cân bằng nhiệt & Tracing", value=True)
-    m_filters = None
-    if not ai_on:
-        f_rank = st.slider("Rank:", 0, 100, (11, 85)); f_an = st.slider("An:", 0, 15, (0, 3)); f_tang_min = st.slider("Tầng min:", 0, 10, 1); f_hard = st.slider("Cứng%:", 0.0, 100.0, (13.0, 45.0))
-        m_filters = {'rank': f_rank, 'an': f_an, 'tang_min': f_tang_min, 'hard': f_hard}
-        if st.button("✅ ÁP DỤNG BỘ LỌC"): process_matrix_v13_73(); st.rerun()
+    st.divider()
+    st.header("🛡️ CẤU HÌNH Trinity")
+    n_bottom = st.slider("Số lượng dây đáy (180 là mốc 90%):", 100, 200, 180)
 
     st.header("📸 QUÉT KQ (OCR)")
     up_img = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png'])
@@ -184,39 +140,76 @@ with st.sidebar:
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""), max_chars=2)
     
     if st.button("🔥 PHÂN TÍCH KỲ MỚI"):
-        df_before = process_matrix_v13_73()
-        dk, da, ds, dl = thermal_ai_engines_v73(df_before, st.session_state['history'], ai_enabled=ai_on, manual_filters=m_filters)
+        # Hàm quét ma trận cơ bản
+        def run_matrix():
+            db = st.session_state['db']; f_str = st.session_state.get('last_full_str', ""); mapping = get_mapping_v11(f_str)
+            stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "clean_wire_count": 0, "clean_window_hits": 0, "all_losses": []} for i in range(100)}
+            for w_id, w_d in db.items():
+                num = mapping.get(str(w_id))
+                if num:
+                    s = stats[num]; sw, sl = int(w_d.get("streak_win", 0)), int(w_d.get("streak_loss", 0))
+                    s["all_losses"].append(sl if sw == 0 else 0)
+                    if sw > s["max_an"]: s["max_an"] = sw
+                    s["clean_window_hits"] += sum(w_d.get("hit_history", [])[-WINDOW:])
+                    if sw == 0: s["clean_wire_count"] += 1; s["total_score"] += float(w_d.get("score", 1000.0))
+            res = []
+            for num, s in stats.items():
+                dc = s["clean_wire_count"] if s["clean_wire_count"] > 0 else 1
+                hard = round((s["clean_window_hits"] / (WINDOW * AVG_WIRES)) * 100, 2)
+                score = round((s["total_score"] / dc) * (1 + hard/100), 2)
+                res.append({"Số": num, "Điểm": score, "An": s["max_an"], "Tang": calculate_tier(s["all_losses"], 65), "DâySạch": s["clean_wire_count"], "Cứng(10k)": hard})
+            df = pd.DataFrame(res).sort_values("Điểm", ascending=False).reset_index(drop=True)
+            df["Rank"] = df.index + 1
+            return df
+
+        df_raw = run_matrix()
+        mapping = get_mapping_v11(st.session_state.get('last_full_str', ""))
+        dk, da, ds, dl, bottom_list = thermal_ai_engines_v75(df_raw, st.session_state['history'], st.session_state['db'], mapping, n_bottom)
+        
         raw_list = [x.strip() for x in st.session_state['raw_input'].replace(",", " ").split() if x]
         if len(raw_list) >= 27:
-            gv = st.session_state['gdb_val']; r_row = df_before[df_before['Số'] == gv].iloc[0] if gv in df_before['Số'].values else None
-            g_p = f"{gv} (R{int(r_row['Rank'])}-A{int(r_row['An'])}-D{int(r_row['DâySạch'])}-T{int(r_row['Tang'])}-C{int(r_row['Cứng(10k)'])}%)" if r_row is not None else gv
-            st.session_state['history'].insert(0, {"STT": len(st.session_state['history'])+1, "GĐB": g_p, "Kết": "A" if gv in dk["Số"].tolist() else "T", "Ai": "A" if gv in da["Số"].tolist() else "T", "Safe": "A" if gv in ds["Số"].tolist() else "T", "AvgC": round(da['Cứng(10k)'].mean(), 2) if not da.empty else 0})
-            update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], get_mapping_v11(st.session_state.get('last_full_str', ""))); st.session_state['last_full_str'] = "".join(raw_list[:27]); process_matrix_v13_73(); st.rerun()
+            gv = st.session_state['gdb_val']
+            st.session_state['history'].insert(0, {"STT": len(st.session_state['history'])+1, "GĐB": gv, "Kết": "A" if gv in dk["Số"].tolist() else "T", "Ai": "A" if gv in da["Số"].tolist() else "T", "Bottom": "A" if gv in bottom_list else "T"})
+            update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
+            st.session_state['last_full_str'] = "".join(raw_list[:27]); st.rerun()
 
-# --- 5. HIỂN THỊ CHÍNH ---
-if st.session_state.get('df_raw') is not None:
-    df_raw_cur = st.session_state['df_raw']
-    dk, da, ds, dl = thermal_ai_engines_v73(df_raw_cur, st.session_state['history'], ai_enabled=ai_on, manual_filters=m_filters)
+# --- 5. HIỂN THỊ ---
+if 'last_full_str' in st.session_state:
+    def run_matrix_display():
+        db = st.session_state['db']; f_str = st.session_state.get('last_full_str', ""); mapping = get_mapping_v11(f_str)
+        stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "clean_wire_count": 0, "clean_window_hits": 0, "all_losses": []} for i in range(100)}
+        for w_id, w_d in db.items():
+            num = mapping.get(str(w_id))
+            if num:
+                s = stats[num]; sw, sl = int(w_d.get("streak_win", 0)), int(w_d.get("streak_loss", 0))
+                s["all_losses"].append(sl if sw == 0 else 0)
+                if sw > s["max_an"]: s["max_an"] = sw
+                s["clean_window_hits"] += sum(w_d.get("hit_history", [])[-WINDOW:])
+                if sw == 0: s["clean_wire_count"] += 1; s["total_score"] += float(w_d.get("score", 1000.0))
+        res = []
+        for num, s in stats.items():
+            dc = s["clean_wire_count"] if s["clean_wire_count"] > 0 else 1
+            hard = round((s["clean_window_hits"] / (WINDOW * AVG_WIRES)) * 100, 2)
+            score = round((s["total_score"] / dc) * (1 + hard/100), 2)
+            res.append({"Số": num, "Điểm": score, "An": s["max_an"], "Tang": calculate_tier(s["all_losses"], 65), "DâySạch": s["clean_wire_count"], "Cứng(10k)": hard})
+        df = pd.DataFrame(res).sort_values("Điểm", ascending=False).reset_index(drop=True)
+        df["Rank"] = df.index + 1
+        return df
+
+    df_display = run_matrix_display()
+    mapping = get_mapping_v11(st.session_state.get('last_full_str', ""))
+    dk, da, ds, dl, bottom_list = thermal_ai_engines_v75(df_display, st.session_state['history'], st.session_state['db'], mapping, n_bottom)
     
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1: st.metric("KẾT (39)", f"{len(dk)}")
-    with col2: st.metric("AI (59)", f"{len(da)}")
-    with col3: st.metric("SAFE (79)", f"{len(ds)}")
-    with col4: st.metric("LOẠI (21)", f"{len(dl)}")
-    with col5: st.download_button("💾 JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}), file_name="matrix_v13_73.json")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("KẾT (39)", len(dk)); c2.metric("AI (59)", len(da)); c3.metric("SAFE (79)", len(ds)); c4.metric("BTM (180 Dây)", len(bottom_list))
+
+    st.write(f"🛡️ **Dàn Đáy 180 dây ({len(bottom_list)} số):**"); st.code(", ".join(bottom_list))
+    st.write(f"🤖 **Dàn Ai 59 (Trinity Convergence):**"); st.code(", ".join(da.sort_values("Số")["Số"].tolist()))
+    st.write(f"🎯 **Dàn Kết 39 (Top Hội Tụ):**"); st.code(", ".join(dk.sort_values("Số")["Số"].tolist()))
     
-    st.write("🎯 **Kết (Ưu tiên Lịch sử + Kỹ thuật):**"); st.code(", ".join(dk.sort_values("Số")["Số"].tolist()))
-    st.write("🤖 **Ai (Dàn khung 59 số):**"); st.code(", ".join(da.sort_values("Số")["Số"].tolist()))
-    st.write("🛡️ **Safe (Dàn bảo vệ 79 số):**"); st.code(", ".join(ds.sort_values("Số")["Số"].tolist()))
-    st.write("❌ **Loại (21 số rác):**"); st.code(", ".join(dl.sort_values("Số")["Số"].tolist()))
-    
-    st.divider(); c_detail, c_hist = st.columns([1.5, 2.3])
-    with c_detail: 
-        st.subheader("🎯 CHI TIẾT AI"); st.dataframe(da, use_container_width=True, hide_index=True, height=750)
-    with c_hist: 
-        st.subheader("📜 LỊCH SỬ")
-        h_df = pd.DataFrame(st.session_state['history'])
-        if not h_df.empty:
-            for col in ["STT", "GĐB", "Kết", "Ai", "Safe", "AvgC"]:
-                if col not in h_df.columns: h_df[col] = "0"
-            st.dataframe(h_df[["STT", "GĐB", "Kết", "Ai", "Safe", "AvgC"]], use_container_width=True, height=750)
+    st.divider()
+    col_a, col_b = st.columns([1, 1.5])
+    with col_a: 
+        st.subheader("📊 CHI TIẾT HỘI TỤ"); st.dataframe(da[['Số', 'Match', 'Tags', 'Điểm', 'Rank']], use_container_width=True, hide_index=True)
+    with col_b: 
+        st.subheader("📜 LỊCH SỬ"); st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True)
