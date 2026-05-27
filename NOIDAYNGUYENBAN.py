@@ -6,7 +6,7 @@ import easyocr
 import re
 from PIL import Image
 
-# --- 1. SETTINGS & OCR ---
+# --- 1. SETTINGS & OCR (KHÔI PHỤC) ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'])
@@ -38,7 +38,7 @@ def update_matrix_state(db, results_27, mapping):
             hist = w_data.get("hit_history", [0]*20)
             hist.append(0); w_data["hit_history"] = hist[-20:]
 
-# --- 2. LOGIC TRUY VẾT DÂY BỆT (WIRE LINEAGE) ---
+# --- 2. LOGIC TRUY VẾT DÂY BỆT ---
 def get_wire_lineage_v2(db, history, mapping, n_top_bet):
     if not history or not db: return set()
     try:
@@ -61,16 +61,12 @@ def get_wire_lineage_v2(db, history, mapping, n_top_bet):
 # --- 3. PHỄU LỌC TRINITY ---
 def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom, n_bet, hard_threshold):
     if df_raw is None or df_raw.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], [], pd.DataFrame()
-    
-    # Lọc Safe 79
     df_safe_orig = df_raw[df_raw['Cứng'] >= hard_threshold].sort_values(['Điểm', 'Rank'], ascending=[False, True]).head(79)
     if len(df_safe_orig) < 79:
         df_safe_orig = df_raw.sort_values(['Điểm', 'Rank'], ascending=[False, True]).head(79)
-        
     set_safe = {f"{int(x):02d}" for x in df_safe_orig['Số']}
     set_bottom = {f"{int(mapping.get(str(w_id))):02d}" for w_id, d in sorted(db.items(), key=lambda x: x[1]['score'])[:n_bottom] if mapping.get(str(w_id))}
     set_bet = get_wire_lineage_v2(db, history, mapping, n_bet)
-
     res_list = []
     for i in range(100):
         num_str = f"{i:02d}"
@@ -78,14 +74,13 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom, n_bet, hard_t
         row = df_raw[df_raw['Số'] == num_str].iloc[0].to_dict()
         row.update({'Match': int(sum([in_s, in_b, in_t])), 'Tags': f"{'S' if in_s else ''}{'B' if in_b else ''}{'T' if in_t else ''}", 'in_safe': 1 if in_s else 0})
         res_list.append(row)
-
     df_res = pd.DataFrame(res_list)
     df_sorted = df_res.sort_values(by=['in_safe', 'Match', 'Điểm'], ascending=[False, False, False])
     return df_sorted.head(39), df_sorted.head(59), df_sorted.head(79), sorted(list(set_bottom)), sorted(list(set_bet)), df_res
 
-# --- 4. UI ---
-st.set_page_config(layout="wide", page_title="Matrix V13.75 Final Fix")
-st.title("🛡️ Matrix V13.75 - Trinity Zero Error")
+# --- 4. GIAO DIỆN (ĐẦY ĐỦ Ô LOAD ẢNH) ---
+st.set_page_config(layout="wide", page_title="Matrix Final Perfect")
+st.title("🛡️ Matrix V13.75 - Final Perfect Edition")
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -102,6 +97,17 @@ with st.sidebar:
         st.session_state['last_full_str'] = data.get('last_full_str', "")
         st.rerun()
 
+    st.header("📸 QUÉT KQ")
+    up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'png', 'jpeg'])
+    if up_img and st.button("🚀 CHẠY OCR"):
+        reader = load_ocr()
+        res_ocr = reader.readtext(np.array(Image.open(up_img)), detail=0)
+        nums_ocr = [n for n in res_ocr if n.isdigit() and 2 <= len(n) <= 5]
+        if nums_ocr:
+            st.session_state['raw_input'] = ", ".join(nums_ocr)
+            st.session_state['gdb_val'] = nums_ocr[0][-2:]
+            st.rerun()
+
     st.header("⚙️ CHỈ SỐ")
     val_tier = st.slider("Mật độ Tầng (%):", 50, 80, 65)
     val_window = st.slider("Window soi (Kỳ):", 5, 20, 10)
@@ -109,7 +115,7 @@ with st.sidebar:
     n_bottom_val = st.slider("Dây ĐÁY:", 50, 500, 180)
     n_bet_val = st.slider("Dây BỆT:", 50, 500, 180)
     
-    st.header("📸 NHẬP KQ")
+    st.header("📝 NHẬP KQ")
     raw_input_area = st.text_area("27 giải:", value=st.session_state.get('raw_input', ""), height=80)
     gdb_input = st.text_input("GĐB (Full):", value=st.session_state.get('gdb_val', ""))
 
@@ -120,18 +126,15 @@ with st.sidebar:
             gdb_num = f"{int(re.sub(r'\D', '', gdb_input)[-2:]):02d}"
             p = st.session_state.get('prev_sets', {})
             check = lambda d: "A" if gdb_num in (d or []) else "T"
-            
-            # Ghi lịch sử kèm Check Ăn/Trượt
             st.session_state['history'].insert(0, {
                 "STT": len(st.session_state['history']) + 1, "GĐB": gdb_input, 
                 "Dan39": check(p.get('d39')), "Dan59": check(p.get('d59')), 
                 "Dan79": check(p.get('d79')), "180thap": check(p.get('dthap')), "180cao": check(p.get('dcao'))
             })
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
-            st.session_state['last_full_str'] = "".join(raw_list[:27])
-            st.rerun()
+            st.session_state['last_full_str'] = "".join(raw_list[:27]); st.rerun()
 
-# --- 5. HIỂN THỊ & FIX KEYERROR ---
+# --- 5. HIỂN THỊ ---
 if st.session_state['last_full_str']:
     def get_matrix_df(t_val, w_val):
         db = st.session_state['db']; mapping = get_mapping_v11(st.session_state['last_full_str'])
@@ -154,10 +157,11 @@ if st.session_state['last_full_str']:
         return df
 
     df_raw_val = get_matrix_df(val_tier, val_window)
-    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], get_mapping_v11(st.session_state['last_full_str']), n_bottom_val, n_bet_val, val_hard)
+    mapping_v = get_mapping_v11(st.session_state['last_full_str'])
+    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], mapping_v, n_bottom_val, n_bet_val, val_hard)
     st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
 
-    # Bảng dàn số
+    st.subheader("🛡️ HỆ THỐNG DÀN SỐ")
     c1, c2, c3 = st.columns(3)
     c1.success(f"🎯 Kết 39 ({len(dk)})"); c1.code(", ".join(dk["Số"].tolist()))
     c2.info(f"🤖 AI 59 ({len(da)})"); c2.code(", ".join(da["Số"].tolist()))
@@ -171,13 +175,11 @@ if st.session_state['last_full_str']:
     with t1:
         if st.session_state['history']:
             df_hist = pd.DataFrame(st.session_state['history'])
-            # --- VÁ LỖI KEYERROR: Tự thêm cột nếu thiếu ---
-            required_cols = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
-            for col in required_cols:
-                if col not in df_hist.columns:
-                    df_hist[col] = "T" # Gán mặc định là Trượt nếu file cũ chưa có
-            st.dataframe(df_hist[required_cols], use_container_width=True, hide_index=True)
+            req_cols = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
+            for col in req_cols:
+                if col not in df_hist.columns: df_hist[col] = "T"
+            st.dataframe(df_hist[req_cols], use_container_width=True, hide_index=True)
     with t2:
         st.dataframe(df_full.sort_values(['Match', 'Điểm'], ascending=False), use_container_width=True, hide_index=True)
 
-    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_pro.json")
+    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_final.json")
