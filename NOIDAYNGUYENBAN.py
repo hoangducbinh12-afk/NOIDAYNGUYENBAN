@@ -40,7 +40,7 @@ def update_matrix_state(db, results_27, mapping):
 
 # --- 2. LOGIC TRUY VẾT DÂY BỆT ---
 def get_wire_lineage_v2(db, history, mapping, n_top_bet):
-    if not history or not db: return set()
+    if not history or not db or n_top_bet == 0: return set()
     try:
         last_gdb_raw = str(history[0].get('GĐB', "")).split()[0]
         last_gdb = f"{int(re.sub(r'\D', '', last_gdb_raw)[-2:]):02d}"
@@ -65,8 +65,16 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom, n_bet, hard_t
     if len(df_safe_orig) < 79:
         df_safe_orig = df_raw.sort_values(['Điểm', 'Rank'], ascending=[False, True]).head(79)
     set_safe = {f"{int(x):02d}" for x in df_safe_orig['Số']}
-    set_bottom = {f"{int(mapping.get(str(w_id))):02d}" for w_id, d in sorted(db.items(), key=lambda x: x[1]['score'])[:n_bottom] if mapping.get(str(w_id))}
+    
+    # Lấy dàn Đáy (nếu n_bottom > 0)
+    set_bottom = set()
+    if n_bottom > 0:
+        bottom_wires = sorted(db.items(), key=lambda x: x[1]['score'])[:n_bottom]
+        set_bottom = {f"{int(mapping.get(str(w_id))):02d}" for w_id, d in bottom_wires if mapping.get(str(w_id))}
+    
+    # Lấy dàn Bệt (nếu n_bet > 0)
     set_bet = get_wire_lineage_v2(db, history, mapping, n_bet)
+
     res_list = []
     for i in range(100):
         num_str = f"{i:02d}"
@@ -79,10 +87,10 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom, n_bet, hard_t
     return df_sorted.head(39), df_sorted.head(59), df_sorted.head(79), sorted(list(set_bottom)), sorted(list(set_bet)), df_res
 
 # --- 4. GIAO DIỆN ---
-st.set_page_config(layout="wide", page_title="Matrix Persistent")
-st.title("🛡️ Matrix V13.75 Master (Persistent Sliders)")
+st.set_page_config(layout="wide", page_title="Matrix Wire Control")
+st.title("🛡️ Matrix V13.75 - Ultimate Control")
 
-# Khởi tạo session state cho các bộ lọc nếu chưa có
+# Khởi tạo session state
 if 'cfg' not in st.session_state:
     st.session_state['cfg'] = {"tier": 65, "win": 10, "hard": 8.0, "bot": 180, "bet": 180}
 if 'db' not in st.session_state: st.session_state['db'] = {}
@@ -91,7 +99,13 @@ if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = 
 if 'prev_sets' not in st.session_state: st.session_state['prev_sets'] = {}
 
 with st.sidebar:
-    st.header("📂 1. NẠP DỮ LIỆU")
+    # --- NÚT RESET ALL ---
+    if st.button("🚨 RESET ALL (Xóa trắng)", type="secondary", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+    
+    st.divider()
+    st.header("📂 1. DỮ LIỆU")
     up_json = st.file_uploader("Nạp file JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
@@ -112,7 +126,6 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    # Nút phân tích
     if st.button("🔥 PHÂN TÍCH & LƯU LỊCH SỬ", type="primary", use_container_width=True):
         raw_val = st.session_state.get('raw_input', "")
         gdb_val = st.session_state.get('gdb_val', "")
@@ -133,15 +146,15 @@ with st.sidebar:
 
     st.header("📝 3. KIỂM TRA INPUT")
     st.session_state['raw_input'] = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
-    st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
+    st.session_state['gdb_val'] = st.text_input("GĐB (Full):", value=st.session_state.get('gdb_val', ""))
 
-    st.header("⚙️ 4. BỘ LỌC (KHÓA)")
-    # Gán giá trị slider vào session state để không bị reset
+    st.header("⚙️ 4. BỘ LỌC")
     st.session_state['cfg']['tier'] = st.slider("Mật độ Tầng (%):", 50, 80, st.session_state['cfg']['tier'])
     st.session_state['cfg']['win'] = st.slider("Window soi (Kỳ):", 5, 20, st.session_state['cfg']['win'])
     st.session_state['cfg']['hard'] = st.slider("Ngưỡng Cứng (C%):", 0.0, 15.0, st.session_state['cfg']['hard'])
-    st.session_state['cfg']['bot'] = st.slider("Dây ĐÁY:", 50, 500, st.session_state['cfg']['bot'])
-    st.session_state['cfg']['bet'] = st.slider("Dây BỆT:", 50, 500, st.session_state['cfg']['bet'])
+    # CHỈNH SỬA GIỚI HẠN TỪ 0 - 350 THEO Ý MÀY
+    st.session_state['cfg']['bot'] = st.slider("Dây ĐÁY (0-350):", 0, 350, st.session_state['cfg']['bot'])
+    st.session_state['cfg']['bet'] = st.slider("Dây BỆT (0-350):", 0, 350, st.session_state['cfg']['bet'])
 
 # --- 5. HIỂN THỊ ---
 if st.session_state['last_full_str']:
@@ -165,27 +178,21 @@ if st.session_state['last_full_str']:
         df["Rank"] = df.index + 1
         return df
 
-    # Sử dụng các giá trị từ session_state['cfg']
     df_raw_val = get_matrix_df(st.session_state['cfg']['tier'], st.session_state['cfg']['win'])
-    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(
-        df_raw_val, st.session_state['history'], st.session_state['db'], 
-        get_mapping_v11(st.session_state['last_full_str']), 
-        st.session_state['cfg']['bot'], st.session_state['cfg']['bet'], st.session_state['cfg']['hard']
-    )
+    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], get_mapping_v11(st.session_state['last_full_str']), st.session_state['cfg']['bot'], st.session_state['cfg']['bet'], st.session_state['cfg']['hard'])
     st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
 
-    st.subheader("🛡️ HỆ THỐNG DÀN SỐ")
     c1, c2, c3 = st.columns(3)
     c1.success(f"🎯 Kết 39 ({len(dk)})"); c1.code(", ".join(dk["Số"].tolist()))
     c2.info(f"🤖 AI 59 ({len(da)})"); c2.code(", ".join(da["Số"].tolist()))
     c3.warning(f"🛡️ Safe 79 ({len(ds)})"); c3.code(", ".join(ds["Số"].tolist()))
     
     c4, c5 = st.columns(2)
-    c4.error(f"📉 Đáy {st.session_state['cfg']['bot']} ({len(d_thap)})"); c4.code(", ".join(d_thap))
-    c5.error(f"📈 Bệt {st.session_state['cfg']['bet']} ({len(d_cao)})"); c5.code(", ".join(d_cao))
+    c4.error(f"📉 Đáy {st.session_state['cfg']['bot']} ({len(d_thap)} số)"); c4.code(", ".join(d_thap))
+    c5.error(f"📈 Bệt {st.session_state['cfg']['bet']} ({len(d_cao)} số)"); c5.code(", ".join(d_cao))
 
     st.divider()
-    t1, t2 = st.tabs(["📜 LỊCH SỬ", "📊 CHI TIẾT"])
+    t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT"])
     with t1:
         if st.session_state['history']:
             df_hist = pd.DataFrame(st.session_state['history'])
