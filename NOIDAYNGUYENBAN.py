@@ -6,7 +6,7 @@ import easyocr
 import re
 from PIL import Image
 
-# --- 1. CÀI ĐẶT CƠ BẢN ---
+# --- 1. SETTINGS & OCR ---
 TOTAL_POS = 107 
 AVG_WIRES = 114.5
 WINDOW = 10 
@@ -42,93 +42,58 @@ def update_matrix_state(db, results_27, mapping):
             hist = w_data.get("hit_history", [0]*10)
             hist.append(0); w_data["hit_history"] = hist[-10:]
 
-# --- 2. BỘ NÃO TRUY VẾT DÂY BỆT (WIRE-TO-WIRE LINEAGE) ---
-
+# --- 2. LOGIC TRUY VẾT DÂY BỆT (WIRE LINEAGE) ---
 def get_wire_lineage_v2(db, history, mapping, n_top=180):
-    """
-    Dàn Bệt: Truy vết nổ gần nhất của từng dây để tìm hệ quả kỳ sau
-    """
     if not history or not db: return set()
-    
     try:
-        # B1: Tìm con số GĐB kỳ vừa rồi
         last_gdb_raw = str(history[0].get('GĐB', "")).split()[0]
         last_gdb = f"{int(re.sub(r'\D', '', last_gdb_raw)[-2:]):02d}"
-        
-        # B2: Tập hợp các ID dây đã nổ con số này (Dây Cha)
         parent_wires = [w_id for w_id, d in db.items() if mapping.get(w_id) == last_gdb and d.get('streak_win', 0) > 0]
-        
         if not parent_wires: return set()
-
-        # B3: Truy vết lịch sử nổ gần nhất của từng Dây Cha
         wire_scores = {}
-        
-        # Giả lập truy vết (Trong thực tế, AI quét qua 11.449 dây và điểm Score/Hit History)
-        # Vì file JSON chỉ lưu hit_history 10 kỳ gần nhất, AI sẽ quét trong phạm vi này
         for w_id in parent_wires:
             hit_hist = db[w_id].get('hit_history', [])
-            # Tìm vị trí nổ gần nhất (số 1 cuối cùng trước kỳ hiện tại)
-            # Giả sử hit_hist[-1] là kỳ vừa nổ, ta xem hit_hist của các dây khác
             for other_id, other_data in db.items():
                 other_hist = other_data.get('hit_history', [])
-                # Nếu dây 'other' nổ ngay sau khi dây 'w_id' nổ trong 10 kỳ qua
                 for t in range(len(hit_hist)-1):
                     if hit_hist[t] == 1 and other_hist[t+1] == 1:
                         wire_scores[other_id] = wire_scores.get(other_id, 0) + 1
-
-        # B4: Lấy 180 dây điểm cao nhất
         top_wires = sorted(wire_scores.items(), key=lambda x: x[1], reverse=True)[:n_top]
-        
-        # B5: Trích xuất ánh xạ số
-        bet_nums = {mapping.get(w_id) for w_id, score in top_wires if mapping.get(w_id)}
-        return {f"{int(x):02d}" for x in bet_nums if x}
-    except:
-        return set()
+        return {f"{int(mapping.get(w_id)):02d}" for w_id, score in top_wires if mapping.get(w_id)}
+    except: return set()
 
-# --- 3. BỘ NÃO HỘI TỤ TRINITY V13.75 ---
-
+# --- 3. BỘ NÃO PHỄU LỌC TRINITY ---
 def thermal_ai_engines_v75(df_raw, history, db, mapping, n_wire):
     if df_raw is None or df_raw.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], [], pd.DataFrame()
-
-    # Dàn A (Gốc): Safe 79
+    
     df_safe_orig = df_raw.sort_values(['Điểm', 'Rank'], ascending=[False, True]).head(79)
     set_safe = {f"{int(x):02d}" for x in df_safe_orig['Số']}
-
-    # Dàn B (Đáy): 180 dây điểm thấp nhất
+    
     bottom_wires = sorted(db.items(), key=lambda x: x[1]['score'])[:n_wire]
     set_bottom = {f"{int(mapping.get(str(w_id))):02d}" for w_id, d in bottom_wires if mapping.get(str(w_id))}
     
-    # Dàn C (Bệt): Wire-to-Wire Lineage
     set_bet = get_wire_lineage_v2(db, history, mapping, n_wire)
 
-    # Chấm điểm giao điểm
     res_list = []
     for i in range(100):
         num_str = f"{i:02d}"
         in_s, in_b, in_t = (num_str in set_safe), (num_str in set_bottom), (num_str in set_bet)
-        match_count = sum([in_s, in_b, in_t])
-        
-        tags = []
-        if in_s: tags.append("Safe")
-        if in_b: tags.append("Đáy")
-        if in_t: tags.append("Bệt")
-        
-        row_find = df_raw[df_raw['Số'] == num_str].iloc[0].to_dict()
-        row_find.update({'Match': match_count, 'Tags': "|".join(tags), 'is_safe': 1 if in_s else 0})
-        res_list.append(row_find)
+        row = df_raw[df_raw['Số'] == num_str].iloc[0].to_dict()
+        row.update({'Match': sum([in_s, in_b, in_t]), 'Tags': f"{'S' if in_s else ''}{'B' if in_b else ''}{'T' if in_t else ''}", 'in_safe': 1 if in_s else 0})
+        res_list.append(row)
 
     df_res = pd.DataFrame(res_list)
-    df_sorted = df_res.sort_values(by=['is_safe', 'Match', 'Điểm'], ascending=[False, False, False])
-
+    df_sorted = df_res.sort_values(by=['in_safe', 'Match', 'Điểm'], ascending=[False, False, False])
+    
     return df_sorted.head(39), df_sorted.head(59), df_sorted.head(79), sorted(list(set_bottom)), sorted(list(set_bet)), df_res
 
-# --- 4. GIAO DIỆN HIỂN THỊ (GIỮ NGUYÊN OCR VÀ CÁC Ô) ---
-st.set_page_config(layout="wide", page_title="Matrix V13.75 Lineage")
-st.title("🔥 Matrix V13.75 - Wire-to-Wire Lineage")
+# --- 4. GIAO DIỆN ---
+st.set_page_config(layout="wide", page_title="Matrix V13.75 Clean")
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
 if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = ""
+if 'prev_sets' not in st.session_state: st.session_state['prev_sets'] = {}
 
 with st.sidebar:
     st.header("📂 DỮ LIỆU")
@@ -136,14 +101,30 @@ with st.sidebar:
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
         st.session_state['db'] = data.get('matrix', data)
-        st.session_state['history'] = data.get('history', [])
+        # --- CHUẨN HÓA LỊCH SỬ KHI NẠP ---
+        raw_hist = data.get('history', [])
+        clean_hist = []
+        for entry in raw_hist:
+            # Chỉ lấy 2 số cuối của GĐB
+            gdb_val = str(entry.get('GĐB', '')).split()[0]
+            gdb_clean = f"{int(re.sub(r'\D', '', gdb_val)[-2:]):02d}" if re.sub(r'\D', '', gdb_val) else "00"
+            
+            clean_entry = {
+                "STT": entry.get("STT", 0),
+                "GĐB": gdb_clean,
+                "Dan39": entry.get("Dan39", "T"),
+                "Dan59": entry.get("Dan59", "T"),
+                "Dan79": entry.get("Dan79", "T"),
+                "180thap": entry.get("180thap", "T"),
+                "180cao": entry.get("180cao", "T")
+            }
+            clean_hist.append(clean_entry)
+        st.session_state['history'] = clean_hist
         st.session_state['last_full_str'] = data.get('last_full_str', "")
         st.rerun()
 
-    n_val = st.slider("Số lượng dây (Bệt/Đáy):", 100, 300, 180)
-    
-    st.header("📸 QUÉT KQ")
-    up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'png', 'jpeg'])
+    st.header("📸 NHẬP KQ")
+    up_img = st.file_uploader("Quét ảnh", type=['jpg', 'png', 'jpeg'])
     if up_img and st.button("🚀 CHẠY OCR"):
         reader = load_ocr()
         res = reader.readtext(np.array(Image.open(up_img)), detail=0)
@@ -153,57 +134,75 @@ with st.sidebar:
             st.session_state['gdb_val'] = nums[0][-2:]
             st.rerun()
 
-    raw_input_val = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=100)
-    gdb_input_val = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
+    raw_input_area = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""))
+    gdb_input = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
 
     if st.button("🔥 PHÂN TÍCH & LƯU"):
-        raw_list = [x.strip() for x in raw_input_val.replace(",", " ").split() if x]
-        if len(raw_list) >= 27 and gdb_input_val:
+        raw_list = [x.strip() for x in raw_input_area.replace(",", " ").split() if x]
+        if len(raw_list) >= 27 and gdb_input:
             mapping = get_mapping_v11(st.session_state['last_full_str'])
-            st.session_state['history'].insert(0, {"STT": len(st.session_state['history'])+1, "GĐB": gdb_input_val})
+            gdb_now = f"{int(gdb_input[-2:]):02d}"
+            p = st.session_state.get('prev_sets', {})
+            check = lambda d: "A" if gdb_now in d else "T"
+            
+            new_hist = {
+                "STT": len(st.session_state['history']) + 1,
+                "GĐB": gdb_now,
+                "Dan39": check(p.get('d39', [])),
+                "Dan59": check(p.get('d59', [])),
+                "Dan79": check(p.get('d79', [])),
+                "180thap": check(p.get('dthap', [])),
+                "180cao": check(p.get('dcao', []))
+            }
+            st.session_state['history'].insert(0, new_hist)
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
             st.session_state['last_full_str'] = "".join(raw_list[:27])
             st.rerun()
 
-# --- HIỂN THỊ ---
+# --- 5. DISPLAY ---
 if st.session_state['last_full_str']:
-    # Hàm tính matrix thô
-    def get_matrix_raw():
+    def get_matrix_df():
         db = st.session_state['db']; mapping = get_mapping_v11(st.session_state['last_full_str'])
-        stats = {f"{i:02d}": {"total_score": 0.0, "max_an": 0, "clean_wire_count": 0, "clean_window_hits": 0, "all_losses": []} for i in range(100)}
+        stats = {f"{i:02d}": {"total_score": 0.0, "clean_wire_count": 0, "clean_window_hits": 0} for i in range(100)}
         for w_id, w_d in db.items():
             num = mapping.get(str(w_id))
             if num:
-                s = stats[num]; sw, sl = int(w_d.get("streak_win", 0)), int(w_d.get("streak_loss", 0))
-                s["all_losses"].append(sl if sw == 0 else 0); s["max_an"] = max(s["max_an"], sw)
+                s = stats[num]
+                if w_d.get("streak_win", 0) == 0:
+                    s["clean_wire_count"] += 1; s["total_score"] += float(w_d.get("score", 1000.0))
                 s["clean_window_hits"] += sum(w_d.get("hit_history", [])[-WINDOW:])
-                if sw == 0: s["clean_wire_count"] += 1; s["total_score"] += float(w_d.get("score", 1000.0))
         res = []
         for num, s in stats.items():
             dc = max(1, s["clean_wire_count"]); hard = round((s["clean_window_hits"] / (WINDOW * AVG_WIRES)) * 100, 2)
             score = round((s["total_score"] / dc) * (1 + hard/100), 2)
-            res.append({"Số": num, "Điểm": score, "An": s["max_an"], "Tang": calculate_tier(s["all_losses"], 65), "DâySạch": s["clean_wire_count"], "Cứng(10k)": hard})
-        df = pd.DataFrame(res).sort_values("Điểm", ascending=False).reset_index(drop=True)
-        df["Rank"] = df.index + 1
-        return df
+            res.append({"Số": num, "Điểm": score, "DâySạch": s["clean_wire_count"], "Cứng": hard})
+        return pd.DataFrame(res).sort_values("Điểm", ascending=False).reset_index(drop=True)
 
-    df_raw_val = get_matrix_raw()
-    mapping_val = get_mapping_v11(st.session_state['last_full_str'])
-    dk, da, ds, dbottom, dbet, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], mapping_val, n_val)
+    df_raw = get_matrix_df()
+    mapping_v = get_mapping_v11(st.session_state['last_full_str'])
+    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw, st.session_state['history'], st.session_state['db'], mapping_v, 180)
 
-    st.subheader("🛡️ HỆ THỐNG 5 DÀN SỐ V13.75")
+    st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
+
+    # UI Dàn số
+    st.subheader("🛡️ HỆ THỐNG DÀN SỐ KỲ NÀY")
     c1, c2, c3 = st.columns(3)
-    with c1: st.success("🎯 Dàn Kết 39"); st.code(", ".join(dk.sort_values("Số")["Số"].tolist()))
-    with c2: st.info("🤖 Dàn AI 59"); st.code(", ".join(da.sort_values("Số")["Số"].tolist()))
-    with c3: st.warning("🛡️ Dàn An Toàn 79"); st.code(", ".join(ds.sort_values("Số")["Số"].tolist()))
-
+    c1.success("Dàn Kết 39"); c1.code(", ".join(dk["Số"].tolist()))
+    c2.info("Dàn AI 59"); c2.code(", ".join(da["Số"].tolist()))
+    c3.warning("Dàn Safe 79"); c3.code(", ".join(ds["Số"].tolist()))
     c4, c5 = st.columns(2)
-    with c4: st.error("📉 Dàn 180 Dây Đáy (Điểm Nhỏ)"); st.code(", ".join(dbottom))
-    with c5: st.error("📈 Dàn 180 Dây Bệt (Wire-to-Wire)"); st.code(", ".join(dbet))
+    c4.error("Dàn 180 Thấp"); c4.code(", ".join(d_thap))
+    c5.error("Dàn 180 Cao (Lineage)"); c5.code(", ".join(d_cao))
 
     st.divider()
-    t1, t2 = st.tabs(["📊 CHI TIẾT HỘI TỤ", "📜 LỊCH SỬ"])
-    with t1: st.dataframe(df_full.sort_values(['Match', 'Điểm'], ascending=False), use_container_width=True, hide_index=True)
-    with t2: st.dataframe(pd.DataFrame(st.session_state['history']), use_container_width=True)
+    t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT MA TRẬN"])
+    with t1:
+        if st.session_state['history']:
+            df_hist = pd.DataFrame(st.session_state['history'])
+            # Chỉ hiển thị các cột mày yêu cầu
+            cols_to_show = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
+            st.dataframe(df_hist[cols_to_show], use_container_width=True, hide_index=True)
+    with t2:
+        st.dataframe(df_full.sort_values(['Match', 'Điểm'], ascending=False), use_container_width=True, hide_index=True)
 
-    st.download_button("💾 XUẤT JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_v13_75.json")
+    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_updated.json")
