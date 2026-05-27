@@ -57,7 +57,7 @@ def get_wire_lineage_v2(db, history, mapping, n_top_bet):
         return {f"{int(mapping.get(w_id)):02d}" for w_id, score in top_wires if mapping.get(w_id)}
     except: return set()
 
-# --- 2. BỘ NÃO HẠ DÀN (BẢO HIỂM T0 & A5) ---
+# --- 2. BỘ NÃO HẠ DÀN (LOGIC MIỄN TRỪ PHẠT VÙNG TRÙNG) ---
 def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     if df_raw is None or df_raw.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], [], pd.DataFrame()
     
@@ -72,19 +72,32 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     df_raw['is_outside'] = (~df_raw['Số'].isin(set_bottom) & ~df_raw['Số'].isin(set_bet)).astype(int)
     df_raw['in_bet_wire'] = df_raw['Số'].isin(set_bet).astype(int)
     
-    df_raw['core_39'] = ((df_raw['Tang'].isin([1, 2])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
-    df_raw['core_59'] = ((df_raw['Tang'].isin([1, 2, 3])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
     df_raw['core_79'] = ((df_raw['Tang'].isin([0, 1, 2, 3])) & (df_raw['An'].isin([1, 2, 3, 4, 5])) & (df_raw['Cứng'] > 7.0)).astype(int)
+    df_raw['core_59'] = ((df_raw['Tang'].isin([1, 2, 3])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
+    df_raw['core_39'] = ((df_raw['Tang'].isin([1, 2])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
 
+    # Risk Shield (Miễn tử)
     df_raw['shield_T0'] = ((df_raw['Tang'] == 0) & (df_raw['Rank'] <= 10)).astype(int)
     df_raw['shield_A5'] = ((df_raw['An'] >= 5) & (df_raw['in_bet_wire'] == 1)).astype(int)
+    df_raw['has_shield'] = ((df_raw['shield_T0'] == 1) | (df_raw['shield_A5'] == 1)).astype(int)
+
+    # LOGIC MỚI: Chỉ phạt -50 điểm nếu là quân trùng mà KHÔNG có Shield
+    # Nếu có shield thì án phạt -50 bị vô hiệu hóa
+    df_raw['overlap_penalty'] = (df_raw['is_overlap'] * (1 - df_raw['has_shield']) * -50)
     
-    df_raw['safety_score_79'] = (df_raw['shield_T0'] * 200) + (df_raw['shield_A5'] * 200) + (df_raw['core_79'] * 100) + (df_raw['is_outside'] * 10) - (df_raw['is_overlap'] * 50)
+    # Tính Safety Score 79
+    df_raw['safety_score_79'] = (
+        (df_raw['has_shield'] * 200) + 
+        (df_raw['core_79'] * 100) + 
+        (df_raw['is_outside'] * 10) + 
+        df_raw['overlap_penalty']
+    )
     
     ds_79 = df_raw.sort_values(by=['safety_score_79', 'Điểm'], ascending=[False, False]).head(79)
     set_79 = set(ds_79['Số'].tolist())
     df_raw['in_79'] = df_raw['Số'].isin(set_79).astype(int)
 
+    # Hạ dàn 59 & 39 (Nesting)
     df_raw['p_59'] = (df_raw['core_59'] * 20) + (df_raw['is_outside'] * 5)
     da_59 = df_raw[df_raw['in_79'] == 1].sort_values(by=['p_59', 'Điểm'], ascending=[False, False]).head(59)
     set_59 = set(da_59['Số'].tolist())
@@ -96,8 +109,8 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     return dk_39, da_59, ds_79, sorted(list(set_bottom)), sorted(list(set_bet)), df_raw
 
 # --- 3. UI ---
-st.set_page_config(layout="wide", page_title="Matrix Risk Shield Full")
-st.title("🛡️ Matrix V13.75 - Risk Shield (Full UI)")
+st.set_page_config(layout="wide", page_title="Matrix Shield Gold")
+st.title("🛡️ Matrix V13.75 - Risk Shield Gold")
 
 if 'cfg' not in st.session_state:
     st.session_state['cfg'] = {"tier": 68, "win": 10, "hard": 7.99, "bot": 40, "bet": 40}
@@ -126,7 +139,6 @@ with st.sidebar:
             st.session_state['gdb_val'] = nums[0][-2:]
             st.rerun()
 
-    # --- KHÔI PHỤC Ô HIỂN THỊ DỮ LIỆU SAU QUÉT ---
     st.divider()
     if st.button("🔥 PHÂN TÍCH & LƯU", type="primary", use_container_width=True):
         raw_val = st.session_state.get('raw_input', "")
@@ -145,12 +157,11 @@ with st.sidebar:
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
             st.session_state['last_full_str'] = "".join(raw_list[:27]); st.rerun()
 
-    st.header("📝 3. INPUT (KIỂM TRA)")
-    # Dùng text_area và text_input gán trực tiếp vào session_state
+    st.header("📝 3. INPUT")
     st.session_state['raw_input'] = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
     st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
 
-    st.header("⚙️ 4. BỘ LỌC FIXED")
+    st.header("⚙️ 4. BỘ LỌC")
     st.session_state['cfg']['tier'] = st.slider("Tầng (%):", 50, 80, 68)
     st.session_state['cfg']['win'] = st.slider("Kỳ:", 5, 20, 10)
     st.session_state['cfg']['hard'] = st.slider("Cứng (C%):", 0.0, 15.0, 7.99)
@@ -183,20 +194,20 @@ if st.session_state['last_full_str']:
     st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
 
     c1, c2, c3 = st.columns(3)
-    c1.success(f"🎯 Kết 39 ({len(dk)})\nLõi T1,2 + Outside"); c1.code(", ".join(dk["Số"].tolist()))
-    c2.info(f"🤖 AI 59 ({len(da)})\nNested 79 + Lõi nới"); c2.code(", ".join(da["Số"].tolist()))
-    c3.warning(f"🛡️ Safe 79 ({len(ds)})\nShield T0 & A5 Active"); c3.code(", ".join(ds["Số"].tolist()))
+    c1.success(f"🎯 Kết 39 ({len(dk)})\nNested in 59 + Core 39"); c1.code(", ".join(dk["Số"].tolist()))
+    c2.info(f"🤖 AI 59 ({len(da)})\nNested in 79 + Core 59"); c2.code(", ".join(da["Số"].tolist()))
+    c3.warning(f"🛡️ Safe 79 ({len(ds)})\nRisk Shield Gold (T0/A5)"); c3.code(", ".join(ds["Số"].tolist()))
 
     st.divider()
-    t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT RISK SHIELD"])
+    t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT SHIELD"])
     with t1:
         if st.session_state['history']:
             df_hist = pd.DataFrame(st.session_state['history'])
-            cols = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
-            for c in cols: 
+            req_cols = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
+            for c in req_cols: 
                 if c not in df_hist.columns: df_hist[c] = "T"
-            st.dataframe(df_hist[cols], use_container_width=True, hide_index=True)
+            st.dataframe(df_hist[req_cols], use_container_width=True, hide_index=True)
     with t2:
         st.dataframe(df_full.sort_values(by=['safety_score_79', 'Điểm'], ascending=[False, False]), use_container_width=True, hide_index=True)
 
-    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_risk_shield.json", use_container_width=True)
+    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_shield_gold.json", use_container_width=True)
