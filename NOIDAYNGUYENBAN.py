@@ -6,7 +6,7 @@ import easyocr
 import re
 from PIL import Image
 
-# --- 1. SETTINGS & OCR (KHÔI PHỤC) ---
+# --- 1. SETTINGS & OCR ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'])
@@ -78,9 +78,9 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom, n_bet, hard_t
     df_sorted = df_res.sort_values(by=['in_safe', 'Match', 'Điểm'], ascending=[False, False, False])
     return df_sorted.head(39), df_sorted.head(59), df_sorted.head(79), sorted(list(set_bottom)), sorted(list(set_bet)), df_res
 
-# --- 4. GIAO DIỆN (ĐẦY ĐỦ Ô LOAD ẢNH) ---
-st.set_page_config(layout="wide", page_title="Matrix Final Perfect")
-st.title("🛡️ Matrix V13.75 - Final Perfect Edition")
+# --- 4. GIAO DIỆN (ERGONOMIC FIX) ---
+st.set_page_config(layout="wide", page_title="Matrix Final V13.75")
+st.title("🛡️ Matrix V13.75 Master")
 
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
@@ -88,8 +88,8 @@ if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = 
 if 'prev_sets' not in st.session_state: st.session_state['prev_sets'] = {}
 
 with st.sidebar:
-    st.header("📂 DỮ LIỆU")
-    up_json = st.file_uploader("Nạp JSON", type=['json'])
+    st.header("📂 1. NẠP DỮ LIỆU")
+    up_json = st.file_uploader("Nạp file JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
         st.session_state['db'] = data.get('matrix', data)
@@ -97,7 +97,7 @@ with st.sidebar:
         st.session_state['last_full_str'] = data.get('last_full_str', "")
         st.rerun()
 
-    st.header("📸 QUÉT KQ")
+    st.header("📸 2. QUÉT KQ KỲ MỚI")
     up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'png', 'jpeg'])
     if up_img and st.button("🚀 CHẠY OCR"):
         reader = load_ocr()
@@ -108,31 +108,38 @@ with st.sidebar:
             st.session_state['gdb_val'] = nums_ocr[0][-2:]
             st.rerun()
 
-    st.header("⚙️ CHỈ SỐ")
-    val_tier = st.slider("Mật độ Tầng (%):", 50, 80, 65)
-    val_window = st.slider("Window soi (Kỳ):", 5, 20, 10)
-    val_hard = st.slider("Ngưỡng Cứng (C%):", 0.0, 15.0, 8.0)
-    n_bottom_val = st.slider("Dây ĐÁY:", 50, 500, 180)
-    n_bet_val = st.slider("Dây BỆT:", 50, 500, 180)
-    
-    st.header("📝 NHẬP KQ")
-    raw_input_area = st.text_area("27 giải:", value=st.session_state.get('raw_input', ""), height=80)
-    gdb_input = st.text_input("GĐB (Full):", value=st.session_state.get('gdb_val', ""))
-
-    if st.button("🔥 PHÂN TÍCH & LƯU"):
-        raw_list = [x.strip() for x in raw_input_area.replace(",", " ").split() if x]
-        if len(raw_list) >= 27 and gdb_input:
+    # --- NÚT PHÂN TÍCH ĐÃ ĐƯỢC ĐƯA LÊN ĐÂY ---
+    st.divider()
+    if st.button("🔥 PHÂN TÍCH & LƯU LỊCH SỬ", type="primary", use_container_width=True):
+        raw_val = st.session_state.get('raw_input', "")
+        gdb_val = st.session_state.get('gdb_val', "")
+        raw_list = [x.strip() for x in raw_val.replace(",", " ").split() if x]
+        if len(raw_list) >= 27 and gdb_val:
             mapping = get_mapping_v11(st.session_state['last_full_str'])
-            gdb_num = f"{int(re.sub(r'\D', '', gdb_input)[-2:]):02d}"
+            gdb_num = f"{int(re.sub(r'\D', '', gdb_val)[-2:]):02d}"
             p = st.session_state.get('prev_sets', {})
             check = lambda d: "A" if gdb_num in (d or []) else "T"
             st.session_state['history'].insert(0, {
-                "STT": len(st.session_state['history']) + 1, "GĐB": gdb_input, 
+                "STT": len(st.session_state['history']) + 1, "GĐB": gdb_val, 
                 "Dan39": check(p.get('d39')), "Dan59": check(p.get('d59')), 
                 "Dan79": check(p.get('d79')), "180thap": check(p.get('dthap')), "180cao": check(p.get('dcao'))
             })
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
-            st.session_state['last_full_str'] = "".join(raw_list[:27]); st.rerun()
+            st.session_state['last_full_str'] = "".join(raw_list[:27])
+            st.success("Đã phân tích xong!")
+            st.rerun()
+    st.divider()
+
+    st.header("📝 3. KIỂM TRA INPUT")
+    st.session_state['raw_input'] = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
+    st.session_state['gdb_val'] = st.text_input("GĐB (Full Metrics):", value=st.session_state.get('gdb_val', ""))
+
+    st.header("⚙️ 4. ĐIỀU CHỈNH CHỈ SỐ")
+    val_tier = st.slider("Mật độ Tầng (%):", 50, 80, 65)
+    val_window = st.slider("Window soi (Kỳ):", 5, 20, 10)
+    val_hard = st.slider("Ngưỡng Cứng (C%):", 0.0, 15.0, 8.0)
+    n_bottom_val = st.slider("Dây ĐÁY (Thấp):", 50, 500, 180)
+    n_bet_val = st.slider("Dây BỆT (Cao):", 50, 500, 180)
 
 # --- 5. HIỂN THỊ ---
 if st.session_state['last_full_str']:
@@ -182,4 +189,4 @@ if st.session_state['last_full_str']:
     with t2:
         st.dataframe(df_full.sort_values(['Match', 'Điểm'], ascending=False), use_container_width=True, hide_index=True)
 
-    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_final.json")
+    st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_final.json", use_container_width=True)
