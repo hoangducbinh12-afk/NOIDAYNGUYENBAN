@@ -74,23 +74,20 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     df_raw['is_overlap'] = df_raw['Số'].isin(set_overlap).astype(int)
     df_raw['is_outside'] = (~df_raw['Số'].isin(set_bottom) & ~df_raw['Số'].isin(set_bet)).astype(int)
     
-    # Lõi kỹ thuật
+    # Cài đặt Lõi
     df_raw['core_39'] = ((df_raw['Tang'].isin([1, 2])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
     df_raw['core_59'] = ((df_raw['Tang'].isin([1, 2, 3])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
     df_raw['core_79'] = ((df_raw['Tang'].isin([1, 2, 3])) & (df_raw['An'].isin([1, 2, 3, 4])) & (df_raw['Cứng'] > 8.0)).astype(int)
 
     # C. LOGIC GỌT DÀN 79 (SMART SURGICAL)
-    # Ta tính điểm "Bảo vệ" - con nào điểm thấp nhất sẽ bị gọt trước
-    # Logic: Ưu tiên giữ Lõi 79 (100đ), Ưu tiên giữ Outside (10đ), 
-    # PHẠT nặng những con nằm trong vùng trùng Overlap (-50đ)
+    # Ưu tiên Lõi 79 (100đ), Outside (10đ), Phạt vùng trùng Overlap (-50đ)
     df_raw['safety_score_79'] = (df_raw['core_79'] * 100) + (df_raw['is_outside'] * 10) - (df_raw['is_overlap'] * 50)
     
-    # Khi gọt (sắp xếp), nếu cùng safety_score thì mới xét đến Điểm/Rank
     ds_79 = df_raw.sort_values(by=['safety_score_79', 'Điểm'], ascending=[False, False]).head(79)
     set_79 = set(ds_79['Số'].tolist())
     df_raw['in_79'] = df_raw['Số'].isin(set_79).astype(int)
 
-    # D. HẠ DÀN 59 & 39 (PHẢI NẰM TRONG 79)
+    # D. HẠ DÀN 59 & 39 (PHẢI NẰM TRONG 79 THEO QUY TẮC BAO PHỦ)
     df_raw['p_59'] = (df_raw['core_59'] * 20) + (df_raw['is_outside'] * 5)
     da_59 = df_raw[df_raw['in_79'] == 1].sort_values(by=['p_59', 'Điểm'], ascending=[False, False]).head(59)
     set_59 = set(da_59['Số'].tolist())
@@ -102,14 +99,15 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     return dk_39, da_59, ds_79, sorted(list(set_bottom)), sorted(list(set_bet)), df_raw
 
 # --- 3. UI VÀ HIỂN THỊ ---
-st.set_page_config(layout="wide", page_title="Matrix Surgical Gọt")
-st.title("🛡️ Matrix V13.75 - Surgical Gọt Edition")
+st.set_page_config(layout="wide", page_title="Matrix Fix Surgical")
+st.title("🛡️ Matrix V13.75 - Surgical Fix")
 
 if 'cfg' not in st.session_state:
     st.session_state['cfg'] = {"tier": 68, "win": 10, "hard": 7.99, "bot": 40, "bet": 40}
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
 if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = ""
+if 'prev_sets' not in st.session_state: st.session_state['prev_sets'] = {}
 
 with st.sidebar:
     if st.button("🚨 RESET ALL", use_container_width=True): st.session_state.clear(); st.rerun()
@@ -192,16 +190,15 @@ if st.session_state['last_full_str']:
     c5.error(f"📈 Bệt {st.session_state['cfg']['bet']} ({len(d_cao)})"); c5.code(", ".join(d_cao))
 
     st.divider()
-    t1, t2 = st.tabs(["📜 LỊCH SỬ", "📊 CHI TIẾT GỌT (OVERLAP)"])
+    t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT GỌT (OVERLAP)"])
     with t1:
         if st.session_state['history']:
             df_hist = pd.DataFrame(st.session_state['history'])
-            cols = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
-            for c in cols: 
+            req_cols = ["STT", "GĐB", "Dan39", "Dan59", "Dan79", "180thap", "180cao"]
+            for c in req_cols: 
                 if c not in df_hist.columns: df_hist[c] = "T"
             st.dataframe(df_hist[req_cols], use_container_width=True, hide_index=True)
     with t2:
-        # Cột is_overlap sẽ cho thấy những con nào nằm trong vùng trùng Đáy-Bệt
         st.dataframe(df_full.sort_values(by=['safety_score_79', 'Điểm'], ascending=[False, False]), use_container_width=True, hide_index=True)
 
     st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_surgical.json", use_container_width=True)
