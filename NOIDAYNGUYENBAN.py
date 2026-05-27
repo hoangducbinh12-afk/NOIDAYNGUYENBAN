@@ -57,11 +57,10 @@ def get_wire_lineage_v2(db, history, mapping, n_top_bet):
         return {f"{int(mapping.get(w_id)):02d}" for w_id, score in top_wires if mapping.get(w_id)}
     except: return set()
 
-# --- 2. LOGIC HẠ DÀN (BẢO HIỂM T0 & A5) ---
+# --- 2. BỘ NÃO HẠ DÀN (BẢO HIỂM T0 & A5) ---
 def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     if df_raw is None or df_raw.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], [], pd.DataFrame()
     
-    # A. Vùng Đáy/Bệt
     set_bottom = set()
     if cfg['bot'] > 0:
         bottom_wires = sorted(db.items(), key=lambda x: x[1]['score'])[:cfg['bot']]
@@ -69,38 +68,23 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     set_bet = get_wire_lineage_v2(db, history, mapping, cfg['bet'])
     set_overlap = set_bottom.intersection(set_bet)
     
-    # B. Gán nhãn các chỉ số đặc biệt
     df_raw['is_overlap'] = df_raw['Số'].isin(set_overlap).astype(int)
     df_raw['is_outside'] = (~df_raw['Số'].isin(set_bottom) & ~df_raw['Số'].isin(set_bet)).astype(int)
     df_raw['in_bet_wire'] = df_raw['Số'].isin(set_bet).astype(int)
     
-    # Lõi kỹ thuật
     df_raw['core_39'] = ((df_raw['Tang'].isin([1, 2])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
     df_raw['core_59'] = ((df_raw['Tang'].isin([1, 2, 3])) & (df_raw['An'].isin([2, 3])) & (df_raw['Cứng'] > 8.0)).astype(int)
-    # Lõi 79 nới lỏng để bao phủ
     df_raw['core_79'] = ((df_raw['Tang'].isin([0, 1, 2, 3])) & (df_raw['An'].isin([1, 2, 3, 4, 5])) & (df_raw['Cứng'] > 7.0)).astype(int)
 
-    # C. CƠ CHẾ BẢO HIỂM (RISK SHIELD)
-    # Thẻ bài miễn tử cho T=0 mà Rank cao (Top 10)
     df_raw['shield_T0'] = ((df_raw['Tang'] == 0) & (df_raw['Rank'] <= 10)).astype(int)
-    # Thẻ bài miễn tử cho A=5 nằm trong Dây Bệt
     df_raw['shield_A5'] = ((df_raw['An'] >= 5) & (df_raw['in_bet_wire'] == 1)).astype(int)
     
-    # D. LOGIC GỌT DÀN 79 CẢI TIẾN
-    # Safety Score: Ưu tiên Shield (200đ) > Lõi 79 (100đ) > Outside (10đ) - Overlap (-50đ)
-    df_raw['safety_score_79'] = (
-        (df_raw['shield_T0'] * 200) + 
-        (df_raw['shield_A5'] * 200) + 
-        (df_raw['core_79'] * 100) + 
-        (df_raw['is_outside'] * 10) - 
-        (df_raw['is_overlap'] * 50)
-    )
+    df_raw['safety_score_79'] = (df_raw['shield_T0'] * 200) + (df_raw['shield_A5'] * 200) + (df_raw['core_79'] * 100) + (df_raw['is_outside'] * 10) - (df_raw['is_overlap'] * 50)
     
     ds_79 = df_raw.sort_values(by=['safety_score_79', 'Điểm'], ascending=[False, False]).head(79)
     set_79 = set(ds_79['Số'].tolist())
     df_raw['in_79'] = df_raw['Số'].isin(set_79).astype(int)
 
-    # E. HẠ DÀN 59 & 39 (GIỮ NGUYÊN NESTING TRONG 79)
     df_raw['p_59'] = (df_raw['core_59'] * 20) + (df_raw['is_outside'] * 5)
     da_59 = df_raw[df_raw['in_79'] == 1].sort_values(by=['p_59', 'Điểm'], ascending=[False, False]).head(59)
     set_59 = set(da_59['Số'].tolist())
@@ -112,8 +96,8 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, cfg):
     return dk_39, da_59, ds_79, sorted(list(set_bottom)), sorted(list(set_bet)), df_raw
 
 # --- 3. UI ---
-st.set_page_config(layout="wide", page_title="Matrix Risk Shield")
-st.title("🛡️ Matrix V13.75 - Risk Shield (T0 & A5 Fix)")
+st.set_page_config(layout="wide", page_title="Matrix Risk Shield Full")
+st.title("🛡️ Matrix V13.75 - Risk Shield (Full UI)")
 
 if 'cfg' not in st.session_state:
     st.session_state['cfg'] = {"tier": 68, "win": 10, "hard": 7.99, "bot": 40, "bet": 40}
@@ -128,8 +112,8 @@ with st.sidebar:
     up_json = st.file_uploader("Nạp JSON", type=['json'])
     if up_json and st.button("XÁC NHẬN NẠP"):
         data = json.load(up_json)
-        st.session_state['db'], st.session_state['history'] = data.get('matrix', data), data.get('history', [])
-        st.session_state['last_full_str'] = data.get('last_full_str', ""); st.rerun()
+        st.session_state['db'], st.session_state['history'], st.session_state['last_full_str'] = data.get('matrix', data), data.get('history', []), data.get('last_full_str', "")
+        st.rerun()
 
     st.header("📸 2. QUÉT KQ")
     up_img = st.file_uploader("Ảnh KQ", type=['jpg', 'png', 'jpeg'])
@@ -137,11 +121,16 @@ with st.sidebar:
         reader = load_ocr()
         res_ocr = reader.readtext(np.array(Image.open(up_img)), detail=0)
         nums = [n for n in res_ocr if n.isdigit() and 2 <= len(n) <= 5]
-        if nums: st.session_state['raw_input'], st.session_state['gdb_val'] = ", ".join(nums), nums[0][-2:]; st.rerun()
+        if nums: 
+            st.session_state['raw_input'] = ", ".join(nums)
+            st.session_state['gdb_val'] = nums[0][-2:]
+            st.rerun()
 
+    # --- KHÔI PHỤC Ô HIỂN THỊ DỮ LIỆU SAU QUÉT ---
     st.divider()
     if st.button("🔥 PHÂN TÍCH & LƯU", type="primary", use_container_width=True):
-        raw_val, gdb_val = st.session_state.get('raw_input', ""), st.session_state.get('gdb_val', "")
+        raw_val = st.session_state.get('raw_input', "")
+        gdb_val = st.session_state.get('gdb_val', "")
         raw_list = [x.strip() for x in raw_val.replace(",", " ").split() if x]
         if len(raw_list) >= 27 and gdb_val:
             mapping = get_mapping_v11(st.session_state['last_full_str'])
@@ -156,7 +145,12 @@ with st.sidebar:
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
             st.session_state['last_full_str'] = "".join(raw_list[:27]); st.rerun()
 
-    st.header("⚙️ 4. BỘ LỌC")
+    st.header("📝 3. INPUT (KIỂM TRA)")
+    # Dùng text_area và text_input gán trực tiếp vào session_state
+    st.session_state['raw_input'] = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
+    st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
+
+    st.header("⚙️ 4. BỘ LỌC FIXED")
     st.session_state['cfg']['tier'] = st.slider("Tầng (%):", 50, 80, 68)
     st.session_state['cfg']['win'] = st.slider("Kỳ:", 5, 20, 10)
     st.session_state['cfg']['hard'] = st.slider("Cứng (C%):", 0.0, 15.0, 7.99)
@@ -186,14 +180,13 @@ if st.session_state['last_full_str']:
 
     df_raw_val = get_matrix_df(st.session_state['cfg']['tier'], st.session_state['cfg']['win'])
     dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], get_mapping_v11(st.session_state['last_full_str']), st.session_state['cfg'])
-    
     st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
 
     c1, c2, c3 = st.columns(3)
-    c1.success(f"🎯 Kết 39 ({len(dk)})\nLõi T1,2 A2,3 Outside"); c1.code(", ".join(dk["Số"].tolist()))
-    c2.info(f"🤖 AI 59 ({len(da)})\nNested in 79 + Core 59"); c2.code(", ".join(da["Số"].tolist()))
-    c3.warning(f"🛡️ Safe 79 ({len(ds)})\nRisk Shield T0-A5 Active"); c3.code(", ".join(ds["Số"].tolist()))
-    
+    c1.success(f"🎯 Kết 39 ({len(dk)})\nLõi T1,2 + Outside"); c1.code(", ".join(dk["Số"].tolist()))
+    c2.info(f"🤖 AI 59 ({len(da)})\nNested 79 + Lõi nới"); c2.code(", ".join(da["Số"].tolist()))
+    c3.warning(f"🛡️ Safe 79 ({len(ds)})\nShield T0 & A5 Active"); c3.code(", ".join(ds["Số"].tolist()))
+
     st.divider()
     t1, t2 = st.tabs(["📜 LỊCH SỬ ĂN/TRƯỢT", "📊 CHI TIẾT RISK SHIELD"])
     with t1:
@@ -204,7 +197,6 @@ if st.session_state['last_full_str']:
                 if c not in df_hist.columns: df_hist[c] = "T"
             st.dataframe(df_hist[cols], use_container_width=True, hide_index=True)
     with t2:
-        # Hiển thị các cột bảo hiểm để mày theo dõi
         st.dataframe(df_full.sort_values(by=['safety_score_79', 'Điểm'], ascending=[False, False]), use_container_width=True, hide_index=True)
 
     st.download_button("💾 LƯU JSON", data=json.dumps({"matrix": st.session_state['db'], "history": st.session_state['history'], "last_full_str": st.session_state['last_full_str']}, ensure_ascii=False), file_name="matrix_risk_shield.json", use_container_width=True)
