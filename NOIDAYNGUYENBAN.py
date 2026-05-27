@@ -78,10 +78,13 @@ def thermal_ai_engines_v75(df_raw, history, db, mapping, n_bottom, n_bet, hard_t
     df_sorted = df_res.sort_values(by=['in_safe', 'Match', 'Điểm'], ascending=[False, False, False])
     return df_sorted.head(39), df_sorted.head(59), df_sorted.head(79), sorted(list(set_bottom)), sorted(list(set_bet)), df_res
 
-# --- 4. GIAO DIỆN (ERGONOMIC FIX) ---
-st.set_page_config(layout="wide", page_title="Matrix Final V13.75")
-st.title("🛡️ Matrix V13.75 Master")
+# --- 4. GIAO DIỆN ---
+st.set_page_config(layout="wide", page_title="Matrix Persistent")
+st.title("🛡️ Matrix V13.75 Master (Persistent Sliders)")
 
+# Khởi tạo session state cho các bộ lọc nếu chưa có
+if 'cfg' not in st.session_state:
+    st.session_state['cfg'] = {"tier": 65, "win": 10, "hard": 8.0, "bot": 180, "bet": 180}
 if 'db' not in st.session_state: st.session_state['db'] = {}
 if 'history' not in st.session_state: st.session_state['history'] = []
 if 'last_full_str' not in st.session_state: st.session_state['last_full_str'] = ""
@@ -97,7 +100,7 @@ with st.sidebar:
         st.session_state['last_full_str'] = data.get('last_full_str', "")
         st.rerun()
 
-    st.header("📸 2. QUÉT KQ KỲ MỚI")
+    st.header("📸 2. QUÉT KQ")
     up_img = st.file_uploader("Chọn ảnh kết quả", type=['jpg', 'png', 'jpeg'])
     if up_img and st.button("🚀 CHẠY OCR"):
         reader = load_ocr()
@@ -108,8 +111,8 @@ with st.sidebar:
             st.session_state['gdb_val'] = nums_ocr[0][-2:]
             st.rerun()
 
-    # --- NÚT PHÂN TÍCH ĐÃ ĐƯỢC ĐƯA LÊN ĐÂY ---
     st.divider()
+    # Nút phân tích
     if st.button("🔥 PHÂN TÍCH & LƯU LỊCH SỬ", type="primary", use_container_width=True):
         raw_val = st.session_state.get('raw_input', "")
         gdb_val = st.session_state.get('gdb_val', "")
@@ -126,20 +129,19 @@ with st.sidebar:
             })
             update_matrix_state(st.session_state['db'], [n[-2:] for n in raw_list[:27]], mapping)
             st.session_state['last_full_str'] = "".join(raw_list[:27])
-            st.success("Đã phân tích xong!")
             st.rerun()
-    st.divider()
 
     st.header("📝 3. KIỂM TRA INPUT")
     st.session_state['raw_input'] = st.text_area("Loto 27 giải:", value=st.session_state.get('raw_input', ""), height=80)
-    st.session_state['gdb_val'] = st.text_input("GĐB (Full Metrics):", value=st.session_state.get('gdb_val', ""))
+    st.session_state['gdb_val'] = st.text_input("GĐB:", value=st.session_state.get('gdb_val', ""))
 
-    st.header("⚙️ 4. ĐIỀU CHỈNH CHỈ SỐ")
-    val_tier = st.slider("Mật độ Tầng (%):", 50, 80, 65)
-    val_window = st.slider("Window soi (Kỳ):", 5, 20, 10)
-    val_hard = st.slider("Ngưỡng Cứng (C%):", 0.0, 15.0, 8.0)
-    n_bottom_val = st.slider("Dây ĐÁY (Thấp):", 50, 500, 180)
-    n_bet_val = st.slider("Dây BỆT (Cao):", 50, 500, 180)
+    st.header("⚙️ 4. BỘ LỌC (KHÓA)")
+    # Gán giá trị slider vào session state để không bị reset
+    st.session_state['cfg']['tier'] = st.slider("Mật độ Tầng (%):", 50, 80, st.session_state['cfg']['tier'])
+    st.session_state['cfg']['win'] = st.slider("Window soi (Kỳ):", 5, 20, st.session_state['cfg']['win'])
+    st.session_state['cfg']['hard'] = st.slider("Ngưỡng Cứng (C%):", 0.0, 15.0, st.session_state['cfg']['hard'])
+    st.session_state['cfg']['bot'] = st.slider("Dây ĐÁY:", 50, 500, st.session_state['cfg']['bot'])
+    st.session_state['cfg']['bet'] = st.slider("Dây BỆT:", 50, 500, st.session_state['cfg']['bet'])
 
 # --- 5. HIỂN THỊ ---
 if st.session_state['last_full_str']:
@@ -163,9 +165,13 @@ if st.session_state['last_full_str']:
         df["Rank"] = df.index + 1
         return df
 
-    df_raw_val = get_matrix_df(val_tier, val_window)
-    mapping_v = get_mapping_v11(st.session_state['last_full_str'])
-    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(df_raw_val, st.session_state['history'], st.session_state['db'], mapping_v, n_bottom_val, n_bet_val, val_hard)
+    # Sử dụng các giá trị từ session_state['cfg']
+    df_raw_val = get_matrix_df(st.session_state['cfg']['tier'], st.session_state['cfg']['win'])
+    dk, da, ds, d_thap, d_cao, df_full = thermal_ai_engines_v75(
+        df_raw_val, st.session_state['history'], st.session_state['db'], 
+        get_mapping_v11(st.session_state['last_full_str']), 
+        st.session_state['cfg']['bot'], st.session_state['cfg']['bet'], st.session_state['cfg']['hard']
+    )
     st.session_state['prev_sets'] = {'d39': dk["Số"].tolist(), 'd59': da["Số"].tolist(), 'd79': ds["Số"].tolist(), 'dthap': d_thap, 'dcao': d_cao}
 
     st.subheader("🛡️ HỆ THỐNG DÀN SỐ")
@@ -173,9 +179,10 @@ if st.session_state['last_full_str']:
     c1.success(f"🎯 Kết 39 ({len(dk)})"); c1.code(", ".join(dk["Số"].tolist()))
     c2.info(f"🤖 AI 59 ({len(da)})"); c2.code(", ".join(da["Số"].tolist()))
     c3.warning(f"🛡️ Safe 79 ({len(ds)})"); c3.code(", ".join(ds["Số"].tolist()))
+    
     c4, c5 = st.columns(2)
-    c4.error(f"📉 Đáy {n_bottom_val} ({len(d_thap)})"); c4.code(", ".join(d_thap))
-    c5.error(f"📈 Bệt {n_bet_val} ({len(d_cao)})"); c5.code(", ".join(d_cao))
+    c4.error(f"📉 Đáy {st.session_state['cfg']['bot']} ({len(d_thap)})"); c4.code(", ".join(d_thap))
+    c5.error(f"📈 Bệt {st.session_state['cfg']['bet']} ({len(d_cao)})"); c5.code(", ".join(d_cao))
 
     st.divider()
     t1, t2 = st.tabs(["📜 LỊCH SỬ", "📊 CHI TIẾT"])
